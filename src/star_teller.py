@@ -6,6 +6,8 @@ A tool to find the best times to observe deep sky objects throughout the year.
 
 import pandas as pd
 import os
+import pickle
+import hashlib
 from datetime import datetime, timedelta
 from skyfield.api import Star, load, wgs84, utc
 from timezonefinder import TimezoneFinder
@@ -30,6 +32,9 @@ class StarTeller:
         self.latitude = latitude
         self.longitude = longitude
         self.elevation = elevation
+        
+        # Create location hash for caching
+        self.location_hash = self._create_location_hash()
         
         # Detect local timezone
         tf = TimezoneFinder()
@@ -58,6 +63,69 @@ class StarTeller:
         
         # Load deep sky object catalog
         self.dso_catalog = self._load_catalog(limit, catalog_filter)
+    
+    def _create_location_hash(self):
+        """Create a unique hash for this location for caching purposes."""
+        # Round coordinates to 4 decimal places (~11m precision) for caching
+        lat_rounded = round(self.latitude, 4)
+        lon_rounded = round(self.longitude, 4)
+        location_string = f"{lat_rounded},{lon_rounded}"
+        return hashlib.md5(location_string.encode()).hexdigest()[:8]
+    
+    def _get_cache_filename(self, year=None):
+        """Get the cache filename for night midpoints."""
+        if year is None:
+            year = datetime.now().year
+        cache_dir = os.path.join(os.path.dirname(__file__), '..', 'user_data', 'cache')
+        os.makedirs(cache_dir, exist_ok=True)
+        return os.path.join(cache_dir, f"night_midpoints_{self.location_hash}_{year}.pkl")
+    
+    def _save_night_midpoints(self, night_midpoints, year):
+        """Save night midpoints to cache file."""
+        try:
+            cache_file = self._get_cache_filename(year)
+            cache_data = {
+                'latitude': self.latitude,
+                'longitude': self.longitude,
+                'timezone': str(self.local_tz),
+                'year': year,
+                'night_midpoints': night_midpoints,
+                'created_date': datetime.now().isoformat()
+            }
+            
+            with open(cache_file, 'wb') as f:
+                pickle.dump(cache_data, f)
+            
+            print(f"✓ Night midpoints cached for future use: {os.path.basename(cache_file)}")
+            return True
+        except Exception as e:
+            print(f"Warning: Could not save night midpoints cache: {e}")
+            return False
+    
+    def _load_night_midpoints(self, year):
+        """Load night midpoints from cache file."""
+        try:
+            cache_file = self._get_cache_filename(year)
+            if not os.path.exists(cache_file):
+                return None
+            
+            with open(cache_file, 'rb') as f:
+                cache_data = pickle.load(f)
+            
+            # Verify the cache is for the same location and timezone
+            if (abs(cache_data['latitude'] - self.latitude) < 0.0001 and 
+                abs(cache_data['longitude'] - self.longitude) < 0.0001 and
+                cache_data['timezone'] == str(self.local_tz)):
+                
+                print(f"✓ Using cached night midpoints for {year}: {os.path.basename(cache_file)}")
+                return cache_data['night_midpoints']
+            else:
+                print(f"Cache mismatch for {year}, will recalculate")
+                return None
+                
+        except Exception as e:
+            print(f"Warning: Could not load night midpoints cache: {e}")
+            return None
     
     def _utc_to_local(self, utc_dt):
         """Convert UTC datetime to local timezone."""
@@ -245,7 +313,7 @@ class StarTeller:
         
         print(f"Removed {len(self.dso_catalog) - len(unique_objects)} duplicate objects")
         
-        # OPTIMIZATION: Calculate night midpoints once for all objects
+        # OPTIMIZATION: Calculate night midpoints once for all objects (with caching)
         print("Calculating night midpoints for the year...")
         night_midpoints = self._calculate_night_midpoints()
         
@@ -258,41 +326,59 @@ class StarTeller:
             
             if optimal_info['best_date'] is not None:
                 result_data = {
+                    # Object Information
                     'Object': obj_id,
                     'Name': obj_data['name'],
                     'Type': obj_data['type'],
+                    
+                    # Best Viewing Information
                     'Best_Date': optimal_info['best_date'],
                     'Best_Time_Local': optimal_info['best_time_local'],
                     'Max_Altitude_deg': optimal_info['max_altitude'],
                     'Azimuth_deg': optimal_info['max_azimuth'],
                     'Direction': optimal_info['direction'],
+                    
+                    # Object Observing Times
                     'Rise_Time_Local': optimal_info['rise_time'],
                     'Rise_Direction': optimal_info['rise_direction'],
                     'Set_Time_Local': optimal_info['set_time'],
                     'Set_Direction': optimal_info['set_direction'],
                     'Observing_Duration_Hours': optimal_info['duration_hours'],
+                    
+                    # Statistics & Reference Info
                     'Dark_Nights_Per_Year': optimal_info['dark_nights_per_year'],
                     'Good_Viewing_Periods': optimal_info['good_viewing_periods'],
+                    'Dark_Start_Local': optimal_info['dark_start_local'],
+                    'Dark_End_Local': optimal_info['dark_end_local'],
                     'Timezone': str(self.local_tz)
                 }
                 results.append(result_data)
             else:
                 results.append({
+                    # Object Information
                     'Object': obj_id,
                     'Name': obj_data['name'],
                     'Type': obj_data['type'],
+                    
+                    # Best Viewing Information
                     'Best_Date': 'N/A',
                     'Best_Time_Local': 'N/A',
                     'Max_Altitude_deg': 'Never visible',
                     'Azimuth_deg': 'N/A',
                     'Direction': 'N/A',
+                    
+                    # Object Observing Times
                     'Rise_Time_Local': 'N/A',
                     'Rise_Direction': 'N/A',
                     'Set_Time_Local': 'N/A',
                     'Set_Direction': 'N/A',
                     'Observing_Duration_Hours': 0,
+                    
+                    # Statistics & Reference Info
                     'Dark_Nights_Per_Year': 0,
                     'Good_Viewing_Periods': 0,
+                    'Dark_Start_Local': 'N/A',
+                    'Dark_End_Local': 'N/A',
                     'Timezone': str(self.local_tz)
                 })
         
@@ -310,55 +396,191 @@ class StarTeller:
         
         return results_df
 
-    def _calculate_night_midpoints(self):
+    def _calculate_night_midpoints(self, start_date=None, days=365):
         """
-        Calculate the midpoint of each night for the entire year.
-        This is the same for all objects so we calculate once and cache.
+        Calculate the midpoint of each night for the specified period using binary search.
+        This is much faster than brute force and achieves 1-minute precision.
+        
+        Args:
+            start_date (date): Start date for calculation (default: today)
+            days (int): Number of days to calculate (default: 365)
         
         Returns:
             list: List of (date, midpoint_datetime_local, dark_start_local, dark_end_local) tuples
         """
+        from datetime import date
+        
+        if start_date is None:
+            start_date = date.today()
+        
+        # Check if we can use cached data
+        years_needed = set()
+        current_date = start_date
+        for day_offset in range(days):
+            check_date = current_date + timedelta(days=day_offset)
+            years_needed.add(check_date.year)
+        
+        # Try to load cached data for all needed years
+        all_cached_midpoints = []
+        missing_years = []
+        
+        for year in sorted(years_needed):
+            cached_midpoints = self._load_night_midpoints(year)
+            if cached_midpoints:
+                # Filter to only include dates in our range
+                for date_obj, midpoint, dark_start, dark_end in cached_midpoints:
+                    if start_date <= date_obj <= start_date + timedelta(days=days-1):
+                        all_cached_midpoints.append((date_obj, midpoint, dark_start, dark_end))
+            else:
+                missing_years.append(year)
+        
+        # If we have all the data we need, return it
+        if not missing_years and len(all_cached_midpoints) >= days * 0.95:  # Allow 5% missing for edge cases
+            print(f"✓ Using cached night midpoints ({len(all_cached_midpoints)} nights)")
+            return sorted(all_cached_midpoints, key=lambda x: x[0])
+        
+        # Otherwise, calculate missing data
+        print("Calculating night midpoints with 1-minute precision using binary search...")
+        
+        if missing_years:
+            print(f"Missing cache for years: {missing_years}")
+        
+        # Calculate night midpoints for the full period
+        night_midpoints = self._calculate_night_midpoints_raw(start_date, days)
+        
+        # Save to cache by year
+        if night_midpoints:
+            midpoints_by_year = {}
+            for date_obj, midpoint, dark_start, dark_end in night_midpoints:
+                year = date_obj.year
+                if year not in midpoints_by_year:
+                    midpoints_by_year[year] = []
+                midpoints_by_year[year].append((date_obj, midpoint, dark_start, dark_end))
+            
+            # Save each year's data separately
+            for year, year_midpoints in midpoints_by_year.items():
+                if year in missing_years:
+                    # Add a buffer: calculate full year of data for better caching
+                    full_year_start = date(year, 1, 1)
+                    full_year_days = (date(year + 1, 1, 1) - full_year_start).days
+                    
+                    if year == datetime.now().year:
+                        # For current year, don't go past today + 365 days
+                        max_date = date.today() + timedelta(days=365)
+                        if date(year + 1, 1, 1) > max_date:
+                            full_year_days = (max_date - full_year_start).days
+                    
+                    full_year_midpoints = self._calculate_night_midpoints_raw(full_year_start, full_year_days)
+                    self._save_night_midpoints(full_year_midpoints, year)
+        
+        return night_midpoints
+    
+    def _calculate_night_midpoints_raw(self, start_date, days):
+        """
+        Raw calculation of night midpoints without caching.
+        """
         from datetime import datetime, timedelta, date
         
-        night_midpoints = []
-        start_date = date.today()
+        def is_dark_at_time(time_local):
+            """Helper to check if a specific time is astronomically dark."""
+            time_utc = time_local.astimezone(pytz.UTC)
+            return self._is_astronomical_dark([time_utc])[0]
         
-        for day_offset in range(365):
+        def binary_search_dark_transition(start_time, end_time, looking_for_dark_start=True):
+            """
+            Binary search to find the exact transition between light and dark.
+            
+            Args:
+                start_time: Start of search window (local time)
+                end_time: End of search window (local time)
+                looking_for_dark_start: If True, find light->dark transition. If False, find dark->light.
+                
+            Returns:
+                datetime: Transition time with 1-minute precision, or None if no transition found
+            """
+            # Ensure we have at least 2 minutes to search
+            if (end_time - start_time).total_seconds() < 120:
+                return None
+            
+            left = start_time
+            right = end_time
+            
+            # Check if transition actually exists in this window
+            left_dark = is_dark_at_time(left)
+            right_dark = is_dark_at_time(right)
+            
+            if looking_for_dark_start:
+                # Looking for light (False) -> dark (True) transition
+                if left_dark or not right_dark:
+                    return None  # No valid transition in window
+            else:
+                # Looking for dark (True) -> light (False) transition  
+                if not left_dark or right_dark:
+                    return None  # No valid transition in window
+            
+            # Binary search until we get 1-minute precision
+            while (right - left).total_seconds() > 60:  # 1-minute precision
+                mid = left + (right - left) / 2
+                mid_dark = is_dark_at_time(mid)
+                
+                if looking_for_dark_start:
+                    # Looking for light -> dark transition
+                    if mid_dark:
+                        right = mid  # Transition is before mid
+                    else:
+                        left = mid   # Transition is after mid
+                else:
+                    # Looking for dark -> light transition
+                    if mid_dark:
+                        left = mid   # Transition is after mid
+                    else:
+                        right = mid  # Transition is before mid
+            
+            # Return the transition point (when darkness changes)
+            return right if looking_for_dark_start else left
+        
+        night_midpoints = []
+        
+        # Use progress bar for the calculation
+        for day_offset in tqdm(range(days), desc="Calculating night midpoints", unit="day"):
             check_date = start_date + timedelta(days=day_offset)
             
-            # Find dark period for this date
-            # Check from 4 PM to 10 AM next day to capture full possible dark period
-            start_check = self.local_tz.localize(datetime.combine(check_date, datetime.min.time().replace(hour=16)))
-            end_check = start_check + timedelta(hours=18)  # 4 PM to 10 AM next day
+            # Define search windows for this date
+            # Search from 3 PM to 11 AM next day to catch all possible dark periods
+            afternoon = self.local_tz.localize(datetime.combine(check_date, datetime.min.time().replace(hour=15)))
+            next_morning = afternoon + timedelta(hours=20)  # 3 PM to 11 AM next day
             
-            dark_start = None
-            dark_end = None
+            # Find dark start: binary search in evening (3 PM to midnight)
+            evening_search_end = afternoon + timedelta(hours=9)  # 3 PM to midnight
+            dark_start = binary_search_dark_transition(afternoon, evening_search_end, looking_for_dark_start=True)
             
-            # Find start and end of dark period
-            current_time = start_check
-            while current_time <= end_check:
-                current_utc = current_time.astimezone(pytz.UTC)
-                is_dark = self._is_astronomical_dark([current_utc])[0]
-                
-                if is_dark and dark_start is None:
-                    dark_start = current_time
-                elif not is_dark and dark_start is not None and dark_end is None:
-                    dark_end = current_time
-                    break
-                    
-                current_time += timedelta(minutes=15)  # 15-minute intervals for finding transitions
+            # Find dark end: binary search in morning (midnight to 11 AM next day)  
+            morning_search_start = afternoon + timedelta(hours=9)  # midnight
+            dark_end = binary_search_dark_transition(morning_search_start, next_morning, looking_for_dark_start=False)
             
-            # If still dark at end of check period, use end time
-            if dark_start and dark_end is None:
-                dark_end = end_check
+            # Handle edge cases for polar regions or very short/long nights
+            if dark_start is None:
+                # Maybe it's dark all day (polar winter) - check if it's dark at noon
+                noon = self.local_tz.localize(datetime.combine(check_date, datetime.min.time().replace(hour=12)))
+                if is_dark_at_time(noon):
+                    dark_start = afternoon  # Start of our search window
+                    dark_end = next_morning  # End of our search window
+                else:
+                    # No dark period this day (polar summer)
+                    continue
             
-            if dark_start and dark_end:
+            if dark_end is None:
+                # Still dark at end of search (polar winter or very long night)
+                dark_end = next_morning
+            
+            if dark_start and dark_end and dark_end > dark_start:
                 # Calculate midpoint of dark period
                 dark_duration = dark_end - dark_start
                 midpoint = dark_start + dark_duration / 2
                 
                 night_midpoints.append((check_date, midpoint, dark_start, dark_end))
         
+        print(f"✓ Calculated {len(night_midpoints)} night midpoints with 1-minute precision")
         return night_midpoints
 
     def _find_optimal_night_efficient(self, ra_deg, dec_deg, min_altitude, direction_filter, night_midpoints):
@@ -372,7 +594,7 @@ class StarTeller:
             night_midpoints: Pre-calculated night midpoint data
             
         Returns:
-            dict: Complete optimal viewing information
+            dict: Complete optimal viewing information including dark period times
         """
         try:
             # Create the celestial object
@@ -383,6 +605,8 @@ class StarTeller:
             best_midpoint = None
             best_azimuth = 0
             total_good_nights = 0
+            best_dark_start = None
+            best_dark_end = None
             
             # Check altitude at each night midpoint
             for check_date, midpoint_local, dark_start, dark_end in night_midpoints:
@@ -413,6 +637,8 @@ class StarTeller:
                         best_date = check_date
                         best_midpoint = midpoint_local
                         best_azimuth = az.degrees
+                        best_dark_start = dark_start
+                        best_dark_end = dark_end
             
             if best_date is None:
                 return {
@@ -421,6 +647,8 @@ class StarTeller:
                     'max_altitude': 'Never visible',
                     'max_azimuth': 'N/A',
                     'direction': 'N/A',
+                    'dark_start_local': 'N/A',
+                    'dark_end_local': 'N/A',
                     'rise_time': 'N/A',
                     'rise_direction': 'N/A',
                     'set_time': 'N/A',
@@ -430,17 +658,8 @@ class StarTeller:
                     'good_viewing_periods': 0
                 }
             
-            # Get the dark period for the optimal night
-            optimal_dark_start = None
-            optimal_dark_end = None
-            for check_date, midpoint_local, dark_start, dark_end in night_midpoints:
-                if check_date == best_date:
-                    optimal_dark_start = dark_start
-                    optimal_dark_end = dark_end
-                    break
-            
             # Now find precise rise/set times and duration for the optimal night
-            rise_set_info = self._find_rise_set_times(star, optimal_dark_start, optimal_dark_end, 
+            rise_set_info = self._find_rise_set_times(star, best_dark_start, best_dark_end, 
                                                     min_altitude, direction_filter)
             
             return {
@@ -449,6 +668,8 @@ class StarTeller:
                 'max_altitude': round(best_altitude, 1),
                 'max_azimuth': round(best_azimuth, 1),
                 'direction': self._azimuth_to_cardinal(best_azimuth),
+                'dark_start_local': best_dark_start.time().strftime('%H:%M'),
+                'dark_end_local': best_dark_end.time().strftime('%H:%M'),
                 'rise_time': rise_set_info['rise_time'],
                 'rise_direction': rise_set_info['rise_direction'],
                 'set_time': rise_set_info['set_time'],
@@ -466,6 +687,8 @@ class StarTeller:
                 'max_altitude': 'Error',
                 'max_azimuth': 'N/A',
                 'direction': 'N/A',
+                'dark_start_local': 'N/A',
+                'dark_end_local': 'N/A',
                 'rise_time': 'N/A',
                 'rise_direction': 'N/A',
                 'set_time': 'N/A',
@@ -618,6 +841,80 @@ class StarTeller:
             print(f"Detailed report saved to {filename}")
         
         return df
+
+    def manage_cache(self, action="status"):
+        """
+        Manage cached night midpoints data.
+        
+        Args:
+            action (str): "status" to show cache info, "clear" to delete cache files
+        """
+        cache_dir = os.path.join(os.path.dirname(__file__), '..', 'user_data', 'cache')
+        
+        if action == "status":
+            print(f"\nCache Status for Location: {self.latitude:.4f}°, {self.longitude:.4f}°")
+            print(f"Location Hash: {self.location_hash}")
+            
+            if not os.path.exists(cache_dir):
+                print("No cache directory found.")
+                return
+            
+            # Find cache files for this location
+            cache_files = []
+            for filename in os.listdir(cache_dir):
+                if filename.startswith(f"night_midpoints_{self.location_hash}_"):
+                    cache_files.append(filename)
+            
+            if not cache_files:
+                print("No cached night midpoints found for this location.")
+                return
+            
+            print(f"Found {len(cache_files)} cached year(s):")
+            total_size = 0
+            for filename in sorted(cache_files):
+                filepath = os.path.join(cache_dir, filename)
+                file_size = os.path.getsize(filepath)
+                total_size += file_size
+                
+                # Extract year from filename
+                year = filename.split('_')[-1].replace('.pkl', '')
+                
+                # Get creation date
+                try:
+                    with open(filepath, 'rb') as f:
+                        cache_data = pickle.load(f)
+                    created_date = cache_data.get('created_date', 'Unknown')
+                    nights_count = len(cache_data.get('night_midpoints', []))
+                    print(f"  {year}: {nights_count} nights, {file_size/1024:.1f} KB, created: {created_date}")
+                except:
+                    print(f"  {year}: {file_size/1024:.1f} KB (corrupted)")
+            
+            print(f"Total cache size: {total_size/1024:.1f} KB")
+            
+        elif action == "clear":
+            if not os.path.exists(cache_dir):
+                print("No cache directory found.")
+                return
+            
+            # Find and delete cache files for this location
+            deleted_count = 0
+            for filename in os.listdir(cache_dir):
+                if filename.startswith(f"night_midpoints_{self.location_hash}_"):
+                    filepath = os.path.join(cache_dir, filename)
+                    try:
+                        os.remove(filepath)
+                        deleted_count += 1
+                        print(f"Deleted: {filename}")
+                    except Exception as e:
+                        print(f"Error deleting {filename}: {e}")
+            
+            if deleted_count == 0:
+                print("No cache files found for this location.")
+            else:
+                print(f"Deleted {deleted_count} cache file(s).")
+        
+        else:
+            print(f"Unknown action: {action}. Use 'status' or 'clear'.")
 
 
 def save_location(latitude, longitude, elevation):
