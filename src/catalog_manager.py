@@ -7,6 +7,45 @@ Only loads from local OpenNGC file - no downloads.
 import pandas as pd
 import numpy as np
 import os
+import urllib.request
+import urllib.error
+
+def download_ngc_catalog(ngc_path):
+    """
+    Automatically download the NGC.csv file from OpenNGC GitHub repository.
+    
+    Args:
+        ngc_path (str): Path where the file should be saved
+        
+    Returns:
+        bool: True if download successful, False otherwise
+    """
+    url = "https://raw.githubusercontent.com/mattiaverga/OpenNGC/refs/heads/master/database_files/NGC.csv"
+    
+    try:
+        print("📥 NGC.csv not found - downloading from OpenNGC repository...")
+        print(f"   Downloading from: {url}")
+        
+        # Ensure the data directory exists
+        os.makedirs(os.path.dirname(ngc_path), exist_ok=True)
+        
+        # Download the file
+        urllib.request.urlretrieve(url, ngc_path)
+        
+        # Verify the file was downloaded and has content
+        if os.path.exists(ngc_path) and os.path.getsize(ngc_path) > 1000:  # At least 1KB
+            print(f"✅ Successfully downloaded NGC.csv ({os.path.getsize(ngc_path)/1024:.0f} KB)")
+            return True
+        else:
+            print("❌ Download failed - file is empty or corrupted")
+            return False
+            
+    except urllib.error.URLError as e:
+        print(f"❌ Network error downloading NGC.csv: {e}")
+        return False
+    except Exception as e:
+        print(f"❌ Error downloading NGC.csv: {e}")
+        return False
 
 def load_ngc_catalog(limit=None, catalog_filter="all"):
     """
@@ -25,75 +64,66 @@ def load_ngc_catalog(limit=None, catalog_filter="all"):
         "ngc": "NGC",
         "all": "All NGC/IC"
     }
-    print(f"Loading {filter_names.get(catalog_filter, 'All NGC/IC')} catalog from OpenNGC...")
-    
     try:
         # Check for the OpenNGC catalog file (in data/ folder)
         ngc_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'NGC.csv')
-        if not os.path.exists(ngc_path):
-            print("✗ NGC.csv file not found in data/ folder.")
-            print("Please download it from: https://github.com/mattiaverga/OpenNGC/blob/master/database_files/NGC.csv")
-            print("And place it in the data/ folder")
-            return pd.DataFrame()
         
-        print("Reading OpenNGC catalog...")
+        # If file doesn't exist, try to download it automatically
+        if not os.path.exists(ngc_path):
+            if not download_ngc_catalog(ngc_path):
+                # Download failed - provide manual instructions
+                print("\n" + "=" * 60)
+                print("MANUAL DOWNLOAD REQUIRED")
+                print("=" * 60)
+                print("❌ Automatic download failed. Please download manually:")
+                print("   1. Go to: https://github.com/mattiaverga/OpenNGC/blob/master/database_files/NGC.csv")
+                print("   2. Click 'Raw' button to download the file")
+                print("   3. Save it as 'NGC.csv' in the data/ folder")
+                print(f"   4. Full path should be: {ngc_path}")
+                print("=" * 60)
+                return pd.DataFrame()
+        
+        # Load and filter catalog quietly
         df = pd.read_csv(ngc_path, sep=';', low_memory=False)
-        print(f"✓ Loaded {len(df)} objects from OpenNGC catalog")
         
         # Filter for NGC and IC objects with coordinates
         df = df[df['Name'].str.match(r'^(NGC|IC)\d+$', na=False)]
         df = df.dropna(subset=['RA', 'Dec'])
-        print(f"✓ Found {len(df)} NGC/IC objects with coordinates")
         
         # Apply catalog filter
         if catalog_filter == "messier":
             # Only objects with Messier designations
             df = df[df['M'].notna() & (df['M'] != '')].copy()
-            print(f"✓ Filtered to {len(df)} objects with Messier designations")
         elif catalog_filter == "ic":
             # Only IC objects
             df = df[df['Name'].str.startswith('IC')].copy()
-            print(f"✓ Filtered to {len(df)} IC objects")
         elif catalog_filter == "ngc":
             # Only NGC objects
             df = df[df['Name'].str.startswith('NGC')].copy()
-            print(f"✓ Filtered to {len(df)} NGC objects")
-        else:
-            # All objects (no filter)
-            print(f"✓ Using all {len(df)} objects")
+        # else: All objects (no filter needed)
         
         # Smart sampling if limit is specified and we have more objects than the limit
         if limit and len(df) > limit:
             if catalog_filter == "messier":
                 # For Messier catalog, just take the first N
                 df = df.head(limit)
-                print(f"Using {len(df)} Messier objects")
             else:
                 # For other catalogs, prioritize objects with Messier designations
                 messier_objects = df[df['M'].notna() & (df['M'] != '')].copy()
                 non_messier = df[df['M'].isna() | (df['M'] == '')].copy()
                 
                 if len(messier_objects) > 0:
-                    print(f"Found {len(messier_objects)} objects with Messier designations")
-                    
                     if len(messier_objects) >= limit:
                         # If we have enough Messier objects, just use those
                         df = messier_objects.head(limit)
-                        print(f"Using {limit} Messier objects")
                     else:
                         # Include all Messier objects plus some others
                         remaining = limit - len(messier_objects)
                         non_messier_sample = non_messier.head(remaining)
-                        
                         df = pd.concat([messier_objects, non_messier_sample], ignore_index=True)
-                        print(f"Using {len(messier_objects)} Messier + {len(non_messier_sample)} other objects")
                 else:
                     # No Messier objects in this catalog, just take first N
                     df = df.head(limit)
-                    print(f"Using {len(df)} objects")
-        else:
-            if len(df) <= limit if limit else True:
-                print(f"Loading all {len(df)} objects")
         
         # Parse coordinates from HMS/DMS to decimal degrees
         def parse_coordinate(coord_str, is_ra=False):
@@ -124,7 +154,6 @@ def load_ngc_catalog(limit=None, catalog_filter="all"):
             except:
                 return np.nan
         
-        print("Converting coordinates to decimal degrees...")
         df['ra_deg'] = df['RA'].apply(lambda x: parse_coordinate(x, is_ra=True))
         df['dec_deg'] = df['Dec'].apply(lambda x: parse_coordinate(x, is_ra=False))
         
@@ -214,7 +243,6 @@ def load_ngc_catalog(limit=None, catalog_filter="all"):
         if messier_objects:
             messier_df = pd.DataFrame(messier_objects)
             catalog_df = pd.concat([catalog_df, messier_df], ignore_index=True)
-            print(f"✓ Added {len(messier_objects)} Messier cross-references")
         
         # Filter to reasonable coordinate ranges
         catalog_df = catalog_df[
@@ -241,14 +269,6 @@ def load_ngc_catalog(limit=None, catalog_filter="all"):
         
         catalog_df['sort_key'] = catalog_df['object_id'].apply(sort_key)
         catalog_df = catalog_df.sort_values('sort_key').drop('sort_key', axis=1)
-        
-        print(f"✓ Processed {len(catalog_df)} objects (including Messier cross-references)")
-        
-        # Show some examples
-        print("\nSample objects:")
-        for i, row in catalog_df.head(3).iterrows():
-            common = f" ({row['common_name']})" if row['common_name'] else ""
-            print(f"  {row['object_id']}: {row['type']}{common}")
         
         return catalog_df
         

@@ -55,6 +55,7 @@ output/
 # Ephemeris files (large, downloaded separately)
 data/de421.bsp
 data/*.bsp
+data/
 
 # Logs
 *.log
