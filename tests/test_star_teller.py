@@ -540,10 +540,6 @@ def quick_integration_test():
         visible_objects = results[results['Max_Altitude_deg'] != 'Never visible']
         print(f"✅ Found {len(visible_objects)} visible objects")
         
-        if len(visible_objects) > 0:
-            best_object = visible_objects.iloc[0]
-            print(f"✅ Best target: {best_object['Object']} - {best_object['Max_Altitude_deg']}°")
-        
         print("🎉 Quick integration test PASSED!")
         return True
         
