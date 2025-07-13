@@ -1,6 +1,6 @@
 """
-StarTeller Test Suite
-====================
+StarTeller-CLI Test Suite
+=========================
 
-Unit tests for the StarTeller astrophotography planning tool.
+Unit tests for the StarTeller-CLI astrophotography planning tool.
 """ 

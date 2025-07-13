@@ -336,14 +336,14 @@ def process_batch_worker(batch_data):
     
     return batch_results
 
-class StarTeller:
+class StarTellerCLI:
     # ============================================================================
     # CONSTRUCTOR AND SETUP
     # ============================================================================
     
     def __init__(self, latitude, longitude, elevation=0, limit=None, catalog_filter="all"):
         """
-        Initialize StarTeller with observer location.
+        Initialize StarTellerCLI with observer location.
         
         Args:
             latitude (float): Observer latitude in degrees
@@ -410,7 +410,7 @@ class StarTeller:
             catalog_filter (str): Catalog type filter ("messier", "ic", "ngc", "all")
             
         Returns:
-            dict: StarTeller-compatible catalog dictionary
+            dict: StarTellerCLI-compatible catalog dictionary
         """
         filter_names = {
             "messier": "Messier Objects",
@@ -427,7 +427,7 @@ class StarTeller:
                 print("Failed to load NGC catalog - please ensure NGC.csv file is present")
                 return {}
             
-            # Convert to StarTeller format
+            # Convert to StarTellerCLI format
             catalog_dict = {}
             for _, row in catalog_df.iterrows():
                 obj_id = row['object_id']
@@ -1137,9 +1137,9 @@ def get_user_location():
     
     return latitude, longitude, elevation
 
-def create_custom_starteller(latitude, longitude, elevation, object_list):
+def create_custom_starteller_cli(latitude, longitude, elevation, object_list):
     """
-    Create a StarTeller instance with custom object list.
+    Create a StarTellerCLI instance with custom object list.
     
     Args:
         latitude (float): Observer latitude
@@ -1147,8 +1147,8 @@ def create_custom_starteller(latitude, longitude, elevation, object_list):
         elevation (float): Observer elevation
         object_list (list): List of object IDs to search for
         
-    Returns:
-        StarTeller: Instance with custom catalog
+            Returns:
+            StarTellerCLI: Instance with custom catalog
     """
     from catalog_manager import load_ngc_catalog
     
@@ -1190,12 +1190,12 @@ def create_custom_starteller(latitude, longitude, elevation, object_list):
     
     if not custom_catalog:
         print("No objects found! Using Messier catalog instead.")
-        return StarTeller(latitude, longitude, elevation, catalog_filter="messier")
+        return StarTellerCLI(latitude, longitude, elevation, catalog_filter="messier")
     
     print(f"✓ Found {found_count}/{len(object_list)} custom objects")
     
-    # Create a custom StarTeller instance
-    st = StarTeller.__new__(StarTeller)
+    # Create a custom StarTellerCLI instance
+    st = StarTellerCLI.__new__(StarTellerCLI)
     st.latitude = latitude
     st.longitude = longitude
     st.elevation = elevation
@@ -1252,7 +1252,7 @@ def create_custom_starteller(latitude, longitude, elevation, object_list):
     return st
 
 def main():
-    """Main function to run StarTeller."""
+    """Main function to run StarTeller-CLI."""
     print("=" * 60)
     print("                   StarTeller-CLI")
     print("        Deep Sky Object Optimal Viewing Calculator")
@@ -1302,9 +1302,9 @@ def main():
     print("PROCESSING...")
     print("=" * 60)
     
-    # Create StarTeller instance with appropriate catalog
+    # Create StarTellerCLI instance with appropriate catalog
     if catalog_choice == "5" and custom_objects:
-        st = create_custom_starteller(latitude, longitude, elevation, object_list)
+        st = create_custom_starteller_cli(latitude, longitude, elevation, object_list)
     else:
         catalog_params = {
             "1": ("messier", 150),      # Messier + some extras to ensure all 110 are included
@@ -1314,10 +1314,10 @@ def main():
         }
         
         catalog_type, limit = catalog_params.get(catalog_choice, ("messier", 150))
-        st = StarTeller(latitude, longitude, elevation, limit=limit, catalog_filter=catalog_type)
+        st = StarTellerCLI(latitude, longitude, elevation, limit=limit, catalog_filter=catalog_type)
     
     if st is None:
-        print("Failed to create StarTeller instance. Exiting.")
+        print("Failed to create StarTellerCLI instance. Exiting.")
         return
     
     # Calculate optimal viewing times

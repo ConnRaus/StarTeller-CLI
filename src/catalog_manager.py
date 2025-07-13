@@ -275,6 +275,6 @@ if __name__ == "__main__":
     catalog = load_ngc_catalog()
     if not catalog.empty:
         print(f"\nSuccessfully loaded {len(catalog)} objects from OpenNGC!")
-        print("This catalog is ready for StarTeller.")
+        print("This catalog is ready for StarTeller-CLI.")
     else:
         print("\nFailed to load catalog") 

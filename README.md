@@ -9,7 +9,7 @@ StarTeller-CLI calculates the absolute best viewing times for celestial objects,
 - **Automatic Data Management**: Downloads and caches astronomical catalogs automatically
 - **Comprehensive Catalogs**: Access to 13,000+ deep sky objects (NGC, IC, Messier)
 - **Optimal Timing**: Finds the best viewing times considering dark sky conditions and object altitude
-- **Location Intelligence**: Automatic location detection or manual coordinate input
+- **Location Memory**: Saves manually entered coordinates for future runs
 - **Direction Filtering**: Filter objects by viewing direction (North, South, East, West)
 - **Performance Optimized**: Multiprocessing support and intelligent caching
 - **Export Ready**: Detailed CSV output with all viewing information
@@ -20,7 +20,7 @@ StarTeller-CLI calculates the absolute best viewing times for celestial objects,
 ### 1. Clone and Setup
 
 ```bash
-git clone https://github.com/yourusername/StarTeller-CLI.git
+git clone https://github.com/ConnRaus/StarTeller-CLI.git
 cd StarTeller-CLI
 
 # Create virtual environment (recommended)
@@ -34,13 +34,13 @@ pip install -r requirements.txt
 ### 2. Run StarTeller-CLI
 
 ```bash
-python src/star_teller.py
+python src/starteller_cli.py
 ```
 
 The program will:
 
 - Automatically download the NGC catalog if needed
-- Detect your location (or prompt for manual input)
+- Prompt for your coordinates (or use previously saved location)
 - Guide you through catalog and viewing preferences
 - Generate a comprehensive CSV with optimal viewing times
 
@@ -71,7 +71,7 @@ Results are saved as CSV files in the `output/` directory with columns including
 
 - **Minimum Altitude**: Set minimum viewing angle (default: 20°)
 - **Direction Filter**: Target specific sky regions (e.g., East-South)
-- **Location**: Automatic detection or manual coordinates
+- **Location**: Manual coordinate input (saved for future runs)
 
 ### Example Custom Objects
 
@@ -83,13 +83,13 @@ M31,NGC224,IC342,M42,NGC2024
 
 ### Location Management
 
-The program automatically detects and saves your location. To manually set coordinates:
+The program prompts for your coordinates on first run and saves them to a local file for future runs. To set coordinates programmatically:
 
 ```python
-from src.star_teller import StarTeller
+from src.starteller_cli import StarTellerCLI
 
 # Create instance with specific coordinates
-st = StarTeller(latitude=40.7589, longitude=-73.9851, elevation=50)
+st = StarTellerCLI(latitude=40.7589, longitude=-73.9851, elevation=50)
 results = st.find_optimal_viewing_times(min_altitude=30)
 ```
 
@@ -169,7 +169,7 @@ The NGC catalog data is licensed under CC-BY-SA-4.0 by the OpenNGC project.
 ### Common Issues
 
 1. **Network Error**: If catalog download fails, check internet connection
-2. **Location Detection**: If automatic location fails, you'll be prompted for manual input
+2. **Location Input**: Enter your coordinates when prompted (latitude, longitude, elevation)
 3. **Cache Issues**: Delete cache files in `user_data/` to force regeneration
 4. **Memory Issues**: Reduce catalog size by using filters (Messier vs All)
 
@@ -178,7 +178,7 @@ The NGC catalog data is licensed under CC-BY-SA-4.0 by the OpenNGC project.
 Run the comprehensive test suite:
 
 ```bash
-python tests/test_star_teller.py --comprehensive
+python tests/test_starteller_cli.py --comprehensive
 ```
 
 ## Contributing

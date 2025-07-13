@@ -1,4 +1,4 @@
-name: StarTeller Tests
+name: StarTeller-CLI Tests
 
 on:
   push:
@@ -54,18 +54,18 @@ jobs:
       - name: Run comprehensive tests
         run: |
           cd ${{ github.workspace }}
-          python tests/test_star_teller.py --comprehensive
+          python tests/test_starteller_cli.py --comprehensive
 
       - name: Run quick integration test
         run: |
           cd ${{ github.workspace }}
-          python tests/test_star_teller.py --quick
+          python tests/test_starteller_cli.py --quick
 
       - name: Test CLI functionality
         run: |
           cd ${{ github.workspace }}
           # Test that the main script can be imported without errors
-          python -c "import sys; sys.path.insert(0, './src'); from star_teller import StarTeller; print('✓ StarTeller imports successfully')"
+          python -c "import sys; sys.path.insert(0, './src'); from starteller_cli import StarTellerCLI; print('✓ StarTellerCLI imports successfully')"
 
       - name: Upload test artifacts (on failure)
         if: failure()

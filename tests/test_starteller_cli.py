@@ -17,10 +17,10 @@ from datetime import datetime, date
 # Add src directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from star_teller import StarTeller, get_user_location, create_custom_starteller
+from starteller_cli import StarTellerCLI, get_user_location, create_custom_starteller_cli
 from catalog_manager import load_ngc_catalog, download_ngc_catalog
 
-class TestStarTellerDownload(unittest.TestCase):
+class TestStarTellerCLIDownload(unittest.TestCase):
     """Test automatic download functionality."""
     
     def setUp(self):
@@ -82,7 +82,7 @@ class TestStarTellerDownload(unittest.TestCase):
         self.assertFalse(result)
 
 
-class TestStarTellerCatalog(unittest.TestCase):
+class TestStarTellerCLICatalog(unittest.TestCase):
     """Test catalog loading and filtering functionality."""
     
     def setUp(self):
@@ -147,13 +147,13 @@ NGC0221;G;00:42:41.83;+40:51:54.6;And;8.5;6.5;168;8.08;;;;;;;;;;;;;;32;;;;;NGC 2
         self.assertLessEqual(len(catalog), 20)  # Allow for Messier cross-references
 
 
-class TestStarTellerCaching(unittest.TestCase):
+class TestStarTellerCLICaching(unittest.TestCase):
     """Test caching functionality."""
     
     def setUp(self):
         """Set up test environment."""
         self.test_cache_dir = tempfile.mkdtemp()
-        self.st = StarTeller(40.7, -74.0, elevation=50, limit=10, catalog_filter="messier")
+        self.st = StarTellerCLI(40.7, -74.0, elevation=50, limit=10, catalog_filter="messier")
         # Override cache directory for testing
         self.original_get_cache_filepath = self.st._get_cache_filepath
         
@@ -227,13 +227,13 @@ class TestStarTellerCaching(unittest.TestCase):
         self.assertIsNone(loaded_data)
 
 
-class TestStarTellerFunctionality(unittest.TestCase):
-    """Test core StarTeller functionality."""
+class TestStarTellerCLIFunctionality(unittest.TestCase):
+    """Test core StarTeller-CLI functionality."""
     
     def setUp(self):
-        """Set up test StarTeller instance."""
+        """Set up test StarTellerCLI instance."""
         self.test_cache_dir = tempfile.mkdtemp()
-        self.st = StarTeller(40.7, -74.0, elevation=50, limit=20, catalog_filter="messier")
+        self.st = StarTellerCLI(40.7, -74.0, elevation=50, limit=20, catalog_filter="messier")
         
         # Override cache directory for testing
         self.original_get_cache_filepath = self.st._get_cache_filepath
@@ -251,7 +251,7 @@ class TestStarTellerFunctionality(unittest.TestCase):
             shutil.rmtree(self.test_cache_dir)
     
     def test_initialization(self):
-        """Test StarTeller initialization."""
+        """Test StarTellerCLI initialization."""
         self.assertAlmostEqual(self.st.latitude, 40.7, places=1)
         self.assertAlmostEqual(self.st.longitude, -74.0, places=1)
         self.assertEqual(self.st.elevation, 50)
@@ -263,7 +263,7 @@ class TestStarTellerFunctionality(unittest.TestCase):
         hash1 = self.st._generate_location_hash()
         
         # Same location should produce same hash
-        st2 = StarTeller(40.7, -74.0, elevation=100, limit=10)  # Different elevation shouldn't matter for hash
+        st2 = StarTellerCLI(40.7, -74.0, elevation=100, limit=10)  # Different elevation shouldn't matter for hash
         # Mock cache directory for st2
         def mock_get_cache_filepath_st2(year=None):
             if year is None:
@@ -276,7 +276,7 @@ class TestStarTellerFunctionality(unittest.TestCase):
         self.assertEqual(hash1, hash2)
         
         # Different location should produce different hash
-        st3 = StarTeller(41.0, -74.0, elevation=50, limit=10)
+        st3 = StarTellerCLI(41.0, -74.0, elevation=50, limit=10)
         # Mock cache directory for st3
         def mock_get_cache_filepath_st3(year=None):
             if year is None:
@@ -331,7 +331,7 @@ class TestStarTellerFunctionality(unittest.TestCase):
         self.assertIsInstance(results_high, pd.DataFrame)
 
 
-class TestStarTellerCustomObjects(unittest.TestCase):
+class TestStarTellerCLICustomObjects(unittest.TestCase):
     """Test custom object functionality."""
     
     def setUp(self):
@@ -344,7 +344,7 @@ class TestStarTellerCustomObjects(unittest.TestCase):
             shutil.rmtree(self.test_cache_dir)
     
     def _mock_cache_dir(self, st):
-        """Mock cache directory for a StarTeller instance."""
+        """Mock cache directory for a StarTellerCLI instance."""
         original_get_cache_filepath = st._get_cache_filepath
         
         def mock_get_cache_filepath(year=None):
@@ -355,11 +355,11 @@ class TestStarTellerCustomObjects(unittest.TestCase):
         st._get_cache_filepath = mock_get_cache_filepath
         return original_get_cache_filepath
     
-    def test_create_custom_starteller(self):
-        """Test creating StarTeller with custom objects."""
+    def test_create_custom_starteller_cli(self):
+        """Test creating StarTellerCLI with custom objects."""
         custom_objects = ['M31', 'M32', 'M42']
         
-        st = create_custom_starteller(40.7, -74.0, 50, custom_objects)
+        st = create_custom_starteller_cli(40.7, -74.0, 50, custom_objects)
         self._mock_cache_dir(st)
         
         self.assertIsNotNone(st)
@@ -377,7 +377,7 @@ class TestStarTellerCustomObjects(unittest.TestCase):
         custom_objects = ['INVALID123', 'NOTREAL456']
         
         # Should fall back to Messier catalog
-        st = create_custom_starteller(40.7, -74.0, 50, custom_objects)
+        st = create_custom_starteller_cli(40.7, -74.0, 50, custom_objects)
         self._mock_cache_dir(st)
         
         self.assertIsNotNone(st)
@@ -385,7 +385,7 @@ class TestStarTellerCustomObjects(unittest.TestCase):
         self.assertGreater(len(st.dso_catalog), 0)
 
 
-class TestStarTellerErrorHandling(unittest.TestCase):
+class TestStarTellerCLIErrorHandling(unittest.TestCase):
     """Test error handling and edge cases."""
     
     def setUp(self):
@@ -398,7 +398,7 @@ class TestStarTellerErrorHandling(unittest.TestCase):
             shutil.rmtree(self.test_cache_dir)
     
     def _mock_cache_dir(self, st):
-        """Mock cache directory for a StarTeller instance."""
+        """Mock cache directory for a StarTellerCLI instance."""
         original_get_cache_filepath = st._get_cache_filepath
         
         def mock_get_cache_filepath(year=None):
@@ -413,7 +413,7 @@ class TestStarTellerErrorHandling(unittest.TestCase):
         """Test handling of invalid coordinates."""
         # These should still work but may have limited functionality
         try:
-            st = StarTeller(91.0, 181.0, elevation=50, limit=5)  # Invalid lat/lon
+            st = StarTellerCLI(91.0, 181.0, elevation=50, limit=5)  # Invalid lat/lon
             self._mock_cache_dir(st)
             # Should still initialize but may have issues with timezone
             self.assertIsNotNone(st)
@@ -423,8 +423,8 @@ class TestStarTellerErrorHandling(unittest.TestCase):
     
     def test_empty_catalog(self):
         """Test handling of empty catalog."""
-        # Create a StarTeller with very restrictive filters to get minimal objects
-        st = StarTeller(40.7, -74.0, elevation=50, limit=1, catalog_filter="ic")
+        # Create a StarTellerCLI with very restrictive filters to get minimal objects
+        st = StarTellerCLI(40.7, -74.0, elevation=50, limit=1, catalog_filter="ic")
         self._mock_cache_dir(st)
         
         # Should handle small/empty catalog gracefully
@@ -438,7 +438,7 @@ class TestStarTellerErrorHandling(unittest.TestCase):
     
     def test_corrupted_cache(self):
         """Test handling of corrupted cache files."""
-        st = StarTeller(40.7, -74.0, elevation=50, limit=5)
+        st = StarTellerCLI(40.7, -74.0, elevation=50, limit=5)
         self._mock_cache_dir(st)
         
         # Create a corrupted cache file
@@ -465,12 +465,12 @@ def run_comprehensive_test():
     
     # Add all test classes
     test_classes = [
-        TestStarTellerDownload,
-        TestStarTellerCatalog, 
-        TestStarTellerCaching,
-        TestStarTellerFunctionality,
-        TestStarTellerCustomObjects,
-        TestStarTellerErrorHandling
+        TestStarTellerCLIDownload,
+        TestStarTellerCLICatalog, 
+        TestStarTellerCLICaching,
+        TestStarTellerCLIFunctionality,
+        TestStarTellerCLICustomObjects,
+        TestStarTellerCLIErrorHandling
     ]
     
     for test_class in test_classes:
@@ -512,7 +512,7 @@ def quick_integration_test():
     
     try:
         # Test basic functionality
-        st = StarTeller(40.7, -74.0, elevation=50, limit=10, catalog_filter="messier")
+        st = StarTellerCLI(40.7, -74.0, elevation=50, limit=10, catalog_filter="messier")
         
         # Override cache directory for testing
         def mock_get_cache_filepath(year=None):
@@ -547,7 +547,7 @@ def quick_integration_test():
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description="StarTeller Test Suite")
+    parser = argparse.ArgumentParser(description="StarTeller-CLI Test Suite")
     parser.add_argument("--quick", action="store_true", help="Run quick integration test only")
     parser.add_argument("--comprehensive", action="store_true", help="Run comprehensive test suite")
     
@@ -564,6 +564,6 @@ if __name__ == "__main__":
         success = quick_integration_test()
         
         if success:
-            print("\nTo run full test suite: python test_star_teller.py --comprehensive")
+            print("\nTo run full test suite: python test_starteller_cli.py --comprehensive")
     
     sys.exit(0 if success else 1) 
