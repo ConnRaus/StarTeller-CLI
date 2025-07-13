@@ -160,34 +160,28 @@ def load_ngc_catalog(limit=None, catalog_filter="all"):
         # Remove entries with failed coordinate conversion
         df = df.dropna(subset=['ra_deg', 'dec_deg'])
         
-        # Expand object types
+        # Expand object types (based on actual NGC.csv data)
         type_expansions = {
             'G': 'Galaxy',
             'SNR': 'Supernova remnant',
             'GCl': 'Globular cluster',
-            'OpCl': 'Open cluster',
-            'OCl': 'Open cluster',  # Alternative abbreviation
+            'OCl': 'Open cluster',
             'Neb': 'Nebula',
-            'HII': 'Emission nebula',
+            'HII': 'HII region',
             'PN': 'Planetary nebula',
-            'DN': 'Dark nebula',
-            'RNe': 'Reflection nebula',
-            'RfN': 'Reflection nebula',  # Alternative abbreviation
+            'RfN': 'Reflection nebula',
             '**': 'Double star',
             '*': 'Star',
-            'As*': 'Asterism',
-            '*Ass': 'Asterism',  # Alternative abbreviation (yes, really!)
+            '*Ass': 'Stellar association',
             'GPair': 'Galaxy pair',
             'GGroup': 'Galaxy group',
-            'GCluster': 'Galaxy cluster',
-            'Quasar': 'Quasar',
-            'RadioS': 'Radio source',
+            'GTrpl': 'Galaxy triplet',
             'EmN': 'Emission nebula',
-            'PlN': 'Planetary nebula',  # Alternative abbreviation
             'Nova': 'Nova',
-            'Part': 'Part of larger object',
             'Dup': 'Duplicate object',
-            'Other': 'Other'
+            'Other': 'Other object',
+            'Cl+N': 'Cluster with nebula',
+            'NonEx': 'Non-existent object'
         }
         
         df['expanded_type'] = df['Type'].map(type_expansions).fillna(df['Type'])

@@ -172,7 +172,7 @@ class TestStarTellerCaching(unittest.TestCase):
     def test_cache_creation(self):
         """Test that cache files are created properly."""
         # This will trigger cache creation
-        midpoints = self.st._calculate_night_midpoints(days=7)  # Small test
+        midpoints = self.st.get_night_midpoints(days=7)  # Small test
         
         self.assertGreater(len(midpoints), 0)
         
