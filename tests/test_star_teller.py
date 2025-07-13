@@ -155,14 +155,14 @@ class TestStarTellerCaching(unittest.TestCase):
         self.test_cache_dir = tempfile.mkdtemp()
         self.st = StarTeller(40.7, -74.0, elevation=50, limit=10, catalog_filter="messier")
         # Override cache directory for testing
-        self.original_get_cache_filename = self.st._get_cache_filename
+        self.original_get_cache_filepath = self.st._get_cache_filepath
         
-        def mock_get_cache_filename(year=None):
+        def mock_get_cache_filepath(year=None):
             if year is None:
                 year = datetime.now().year
             return os.path.join(self.test_cache_dir, f"night_midpoints_test_{year}.pkl")
         
-        self.st._get_cache_filename = mock_get_cache_filename
+        self.st._get_cache_filepath = mock_get_cache_filepath
     
     def tearDown(self):
         """Clean up test directories."""
@@ -184,7 +184,7 @@ class TestStarTellerCaching(unittest.TestCase):
         """Test loading data from cache."""
         # Create cache data
         test_data = [(date.today(), datetime.now(), datetime.now(), datetime.now())]
-        cache_file = self.st._get_cache_filename(2025)
+        cache_file = self.st._get_cache_filepath(2025)
         
         cache_data = {
             'latitude': self.st.latitude,
@@ -200,14 +200,14 @@ class TestStarTellerCaching(unittest.TestCase):
             pickle.dump(cache_data, f)
         
         # Test loading
-        loaded_data = self.st._load_night_midpoints(2025)
+        loaded_data = self.st._load_cache(2025)
         self.assertIsNotNone(loaded_data)
         self.assertEqual(len(loaded_data), 1)
     
     def test_cache_mismatch(self):
         """Test handling of cache location/timezone mismatch."""
         # Create cache with different location
-        cache_file = self.st._get_cache_filename(2025)
+        cache_file = self.st._get_cache_filepath(2025)
         
         cache_data = {
             'latitude': 50.0,  # Different latitude
@@ -223,7 +223,7 @@ class TestStarTellerCaching(unittest.TestCase):
             pickle.dump(cache_data, f)
         
         # Should return None due to location mismatch
-        loaded_data = self.st._load_night_midpoints(2025)
+        loaded_data = self.st._load_cache(2025)
         self.assertIsNone(loaded_data)
 
 
@@ -236,14 +236,14 @@ class TestStarTellerFunctionality(unittest.TestCase):
         self.st = StarTeller(40.7, -74.0, elevation=50, limit=20, catalog_filter="messier")
         
         # Override cache directory for testing
-        self.original_get_cache_filename = self.st._get_cache_filename
+        self.original_get_cache_filepath = self.st._get_cache_filepath
         
-        def mock_get_cache_filename(year=None):
+        def mock_get_cache_filepath(year=None):
             if year is None:
                 year = datetime.now().year
             return os.path.join(self.test_cache_dir, f"night_midpoints_test_{year}.pkl")
         
-        self.st._get_cache_filename = mock_get_cache_filename
+        self.st._get_cache_filepath = mock_get_cache_filepath
     
     def tearDown(self):
         """Clean up test directories."""
@@ -260,43 +260,35 @@ class TestStarTellerFunctionality(unittest.TestCase):
     
     def test_location_hash(self):
         """Test location hash generation."""
-        hash1 = self.st._create_location_hash()
+        hash1 = self.st._generate_location_hash()
         
         # Same location should produce same hash
         st2 = StarTeller(40.7, -74.0, elevation=100, limit=10)  # Different elevation shouldn't matter for hash
         # Mock cache directory for st2
-        def mock_get_cache_filename_st2(year=None):
+        def mock_get_cache_filepath_st2(year=None):
             if year is None:
                 year = datetime.now().year
             return os.path.join(self.test_cache_dir, f"night_midpoints_test2_{year}.pkl")
-        st2._get_cache_filename = mock_get_cache_filename_st2
+        st2._get_cache_filepath = mock_get_cache_filepath_st2
         
-        hash2 = st2._create_location_hash()
+        hash2 = st2._generate_location_hash()
         
         self.assertEqual(hash1, hash2)
         
         # Different location should produce different hash
         st3 = StarTeller(41.0, -74.0, elevation=50, limit=10)
         # Mock cache directory for st3
-        def mock_get_cache_filename_st3(year=None):
+        def mock_get_cache_filepath_st3(year=None):
             if year is None:
                 year = datetime.now().year
             return os.path.join(self.test_cache_dir, f"night_midpoints_test3_{year}.pkl")
-        st3._get_cache_filename = mock_get_cache_filename_st3
+        st3._get_cache_filepath = mock_get_cache_filepath_st3
         
-        hash3 = st3._create_location_hash()
+        hash3 = st3._generate_location_hash()
         
         self.assertNotEqual(hash1, hash3)
     
-    def test_azimuth_to_cardinal(self):
-        """Test azimuth to cardinal direction conversion."""
-        self.assertEqual(self.st._azimuth_to_cardinal(0), 'N')
-        self.assertEqual(self.st._azimuth_to_cardinal(90), 'E')
-        self.assertEqual(self.st._azimuth_to_cardinal(180), 'S')
-        self.assertEqual(self.st._azimuth_to_cardinal(270), 'W')
-        self.assertEqual(self.st._azimuth_to_cardinal(360), 'N')
-        self.assertEqual(self.st._azimuth_to_cardinal(45), 'NE')
-    
+
     def test_find_optimal_viewing_times(self):
         """Test optimal viewing times calculation."""
         results = self.st.find_optimal_viewing_times(min_altitude=20)
@@ -353,15 +345,15 @@ class TestStarTellerCustomObjects(unittest.TestCase):
     
     def _mock_cache_dir(self, st):
         """Mock cache directory for a StarTeller instance."""
-        original_get_cache_filename = st._get_cache_filename
+        original_get_cache_filepath = st._get_cache_filepath
         
-        def mock_get_cache_filename(year=None):
+        def mock_get_cache_filepath(year=None):
             if year is None:
                 year = datetime.now().year
             return os.path.join(self.test_cache_dir, f"night_midpoints_test_{year}.pkl")
         
-        st._get_cache_filename = mock_get_cache_filename
-        return original_get_cache_filename
+        st._get_cache_filepath = mock_get_cache_filepath
+        return original_get_cache_filepath
     
     def test_create_custom_starteller(self):
         """Test creating StarTeller with custom objects."""
@@ -407,15 +399,15 @@ class TestStarTellerErrorHandling(unittest.TestCase):
     
     def _mock_cache_dir(self, st):
         """Mock cache directory for a StarTeller instance."""
-        original_get_cache_filename = st._get_cache_filename
+        original_get_cache_filepath = st._get_cache_filepath
         
-        def mock_get_cache_filename(year=None):
+        def mock_get_cache_filepath(year=None):
             if year is None:
                 year = datetime.now().year
             return os.path.join(self.test_cache_dir, f"night_midpoints_test_{year}.pkl")
         
-        st._get_cache_filename = mock_get_cache_filename
-        return original_get_cache_filename
+        st._get_cache_filepath = mock_get_cache_filepath
+        return original_get_cache_filepath
     
     def test_invalid_coordinates(self):
         """Test handling of invalid coordinates."""
@@ -450,14 +442,14 @@ class TestStarTellerErrorHandling(unittest.TestCase):
         self._mock_cache_dir(st)
         
         # Create a corrupted cache file
-        cache_file = st._get_cache_filename(2025)
+        cache_file = st._get_cache_filepath(2025)
         os.makedirs(os.path.dirname(cache_file), exist_ok=True)
         
         with open(cache_file, 'w') as f:
             f.write("This is not valid pickle data")
         
         # Should handle corruption gracefully and return None
-        loaded_data = st._load_night_midpoints(2025)
+        loaded_data = st._load_cache(2025)
         self.assertIsNone(loaded_data)
 
 
@@ -523,12 +515,12 @@ def quick_integration_test():
         st = StarTeller(40.7, -74.0, elevation=50, limit=10, catalog_filter="messier")
         
         # Override cache directory for testing
-        def mock_get_cache_filename(year=None):
+        def mock_get_cache_filepath(year=None):
             if year is None:
                 year = datetime.now().year
             return os.path.join(test_cache_dir, f"night_midpoints_quick_test_{year}.pkl")
         
-        st._get_cache_filename = mock_get_cache_filename
+        st._get_cache_filepath = mock_get_cache_filepath
         
         print(f"✅ Initialized with {len(st.dso_catalog)} objects")
         

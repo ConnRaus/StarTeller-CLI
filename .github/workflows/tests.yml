@@ -1,0 +1,75 @@
+name: StarTeller Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        python-version: [3.9, 3.10, 3.11, 3.12]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # Install test dependencies
+          pip install mock
+
+      - name: Create required directories
+        run: |
+          mkdir -p data
+          mkdir -p user_data/cache
+          mkdir -p output
+
+      - name: Download test data
+        run: |
+          # Download a small sample of NGC data for testing
+          curl -o data/NGC.csv "https://raw.githubusercontent.com/mattiaverga/OpenNGC/master/database_files/NGC.csv"
+
+      - name: Run comprehensive tests
+        run: |
+          cd ${{ github.workspace }}
+          python tests/test_star_teller.py --comprehensive
+
+      - name: Run quick integration test
+        run: |
+          cd ${{ github.workspace }}
+          python tests/test_star_teller.py --quick
+
+      - name: Test CLI functionality
+        run: |
+          cd ${{ github.workspace }}
+          # Test that the main script can be imported without errors
+          python -c "import sys; sys.path.insert(0, './src'); from star_teller import StarTeller; print('✓ StarTeller imports successfully')"
+
+      - name: Upload test artifacts (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-artifacts-python-${{ matrix.python-version }}
+          path: |
+            user_data/
+            output/
+          retention-days: 7
