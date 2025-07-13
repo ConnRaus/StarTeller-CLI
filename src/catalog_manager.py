@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Simple NGC Catalog Loader for StarTeller
-Only loads from local OpenNGC file - no downloads.
+Simple NGC Catalog Loader for StarTeller-CLI
+Handles automatic download and loading of OpenNGC catalog data.
 """
 
 import pandas as pd

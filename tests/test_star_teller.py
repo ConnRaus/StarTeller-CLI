@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Comprehensive Test Suite for StarTeller
+Comprehensive Test Suite for StarTeller-CLI
 Tests all functionality including downloads, caching, multiprocessing, and error handling.
 """
 
@@ -456,7 +456,7 @@ class TestStarTellerErrorHandling(unittest.TestCase):
 def run_comprehensive_test():
     """Run all tests and provide summary."""
     print("=" * 60)
-    print("           STARTELLER COMPREHENSIVE TEST SUITE")
+    print("        STARTELLER-CLI COMPREHENSIVE TEST SUITE")
     print("=" * 60)
     
     # Create test suite
@@ -494,7 +494,7 @@ def run_comprehensive_test():
         print("✅ Core calculations working")
         print("✅ Custom objects working")
         print("✅ Error handling working")
-        print("\nStarTeller is ready for production use!")
+        print("\nStarTeller-CLI is ready for production use!")
     else:
         print(f"❌ {len(result.failures)} test(s) failed")
         print(f"⚠️  {len(result.errors)} test(s) had errors")

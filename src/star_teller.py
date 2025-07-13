@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-StarTeller - Optimal Deep Sky Object Viewing Time Calculator
-A tool to find the best times to observe deep sky objects throughout the year.
+StarTeller-CLI - Optimal Deep Sky Object Viewing Time Calculator
+A command-line tool to find the best times to observe deep sky objects throughout the year.
 """
 
 import pandas as pd
@@ -1254,7 +1254,7 @@ def create_custom_starteller(latitude, longitude, elevation, object_list):
 def main():
     """Main function to run StarTeller."""
     print("=" * 60)
-    print("                      StarTeller")
+    print("                   StarTeller-CLI")
     print("        Deep Sky Object Optimal Viewing Calculator")
     print("=" * 60)
     
