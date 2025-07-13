@@ -2,11 +2,6 @@
 """
 StarTeller - Optimal Deep Sky Object Viewing Time Calculator
 A tool to find the best times to observe deep sky objects throughout the year.
-
-Performance Notes:
-- Uses optimized vectorized calculations for ~2x faster night midpoint calculations
-- Coarse grid sampling + targeted binary search reduces computation from thousands to hundreds of calculations
-- Caches results for reuse across multiple runs
 """
 
 import pandas as pd
@@ -47,14 +42,21 @@ def process_batch_worker(batch_data):
     # Create Skyfield objects for this process
     ts = load.timescale()
     try:
-        # Try to load ephemeris from data folder first
+        # Set up data directory and ephemeris file path
         import os
-        eph_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'de421.bsp')
+        data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
+        os.makedirs(data_dir, exist_ok=True)  # Ensure data directory exists
+        eph_path = os.path.join(data_dir, 'de421.bsp')
+        
         if os.path.exists(eph_path):
             eph = load(eph_path)
         else:
-            eph = load('de421.bsp')
+            # Download ephemeris to data folder
+            from skyfield.iokit import Loader
+            loader = Loader(data_dir)
+            eph = loader('de421.bsp')
     except:
+        # Fallback if there are any issues
         eph = load('de421.bsp')
     
     earth = eph['earth']
@@ -369,13 +371,19 @@ class StarTeller:
         
         # Load timescale and ephemeris data
         self.ts = load.timescale()
-        # Look for ephemeris file in data/ folder
-        eph_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'de421.bsp')
+        
+        # Set up data directory and ephemeris file path
+        data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
+        os.makedirs(data_dir, exist_ok=True)  # Ensure data directory exists
+        eph_path = os.path.join(data_dir, 'de421.bsp')
+        
         if os.path.exists(eph_path):
             self.eph = load(eph_path)  # JPL ephemeris from data folder
         else:
-            # Fallback to current directory or Skyfield default
-            self.eph = load('de421.bsp')  # JPL ephemeris
+            # Download ephemeris to data folder
+            from skyfield.iokit import Loader
+            loader = Loader(data_dir)
+            self.eph = loader('de421.bsp')  # This will download to data/ folder
         self.earth = self.eph['earth']
         self.sun = self.eph['sun']
         
@@ -1210,13 +1218,19 @@ def create_custom_starteller(latitude, longitude, elevation, object_list):
     from skyfield.api import load
     from skyfield.api import wgs84
     st.ts = load.timescale()
-    # Look for ephemeris file in data/ folder
-    eph_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'de421.bsp')
+    
+    # Set up data directory and ephemeris file path
+    data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
+    os.makedirs(data_dir, exist_ok=True)  # Ensure data directory exists
+    eph_path = os.path.join(data_dir, 'de421.bsp')
+    
     if os.path.exists(eph_path):
         st.eph = load(eph_path)  # JPL ephemeris from data folder
     else:
-        # Fallback to current directory or Skyfield default
-        st.eph = load('de421.bsp')  # JPL ephemeris
+        # Download ephemeris to data folder
+        from skyfield.iokit import Loader
+        loader = Loader(data_dir)
+        st.eph = loader('de421.bsp')  # This will download to data/ folder
     st.earth = st.eph['earth'] 
     st.sun = st.eph['sun']
     st.observer = st.earth + wgs84.latlon(latitude, longitude, elevation_m=elevation)

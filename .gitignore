@@ -46,7 +46,6 @@ Thumbs.db
 
 # User-specific data (should not be committed)
 user_data/
-*.txt
 
 # Output files (generated, not source)
 output/
