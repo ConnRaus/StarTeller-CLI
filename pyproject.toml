@@ -9,7 +9,7 @@ description = "A comprehensive command-line tool for astrophotographers to find 
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
-    {name = "Connor Rauscher"}
+    {name = "ConnRaus"}
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
