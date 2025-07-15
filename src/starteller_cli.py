@@ -12,7 +12,10 @@ from datetime import datetime, timedelta
 from skyfield.api import Star, load, wgs84, utc
 from timezonefinder import TimezoneFinder
 import pytz
-from catalog_manager import load_ngc_catalog
+try:
+    from .catalog_manager import load_ngc_catalog
+except ImportError:
+    from catalog_manager import load_ngc_catalog
 from tqdm import tqdm
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -1150,7 +1153,10 @@ def create_custom_starteller_cli(latitude, longitude, elevation, object_list):
             Returns:
             StarTellerCLI: Instance with custom catalog
     """
-    from catalog_manager import load_ngc_catalog
+    try:
+        from .catalog_manager import load_ngc_catalog
+    except ImportError:
+        from catalog_manager import load_ngc_catalog
     
     # Load full catalog
     full_catalog = load_ngc_catalog()

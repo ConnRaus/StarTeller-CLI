@@ -18,7 +18,10 @@ from datetime import datetime, date
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from starteller_cli import StarTellerCLI, get_user_location, create_custom_starteller_cli
-from catalog_manager import load_ngc_catalog, download_ngc_catalog
+try:
+    from src.catalog_manager import load_ngc_catalog, download_ngc_catalog
+except ImportError:
+    from catalog_manager import load_ngc_catalog, download_ngc_catalog
 
 class TestStarTellerCLIDownload(unittest.TestCase):
     """Test automatic download functionality."""
