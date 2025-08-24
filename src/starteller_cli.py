@@ -344,7 +344,7 @@ class StarTellerCLI:
     # CONSTRUCTOR AND SETUP
     # ============================================================================
     
-    def __init__(self, latitude, longitude, elevation=0, limit=None, catalog_filter="all"):
+    def __init__(self, latitude, longitude, elevation=0, catalog_filter="all"):
         """
         Initialize StarTellerCLI with observer location.
         
@@ -352,7 +352,6 @@ class StarTellerCLI:
             latitude (float): Observer latitude in degrees
             longitude (float): Observer longitude in degrees  
             elevation (float): Observer elevation in meters (default: 0)
-            limit (int): Maximum number of objects to load (None for all)
             catalog_filter (str): Catalog type filter ("messier", "ic", "ngc", "all")
         """
         self.latitude = latitude
@@ -394,7 +393,7 @@ class StarTellerCLI:
         self.observer = self.earth + wgs84.latlon(latitude, longitude, elevation_m=elevation)
         
         # Load deep sky object catalog
-        self.dso_catalog = self._setup_catalog(limit, catalog_filter)
+        self.dso_catalog = self._setup_catalog(catalog_filter)
     
     def _generate_location_hash(self):
         """Generate a unique hash for this location for caching purposes."""
@@ -404,12 +403,11 @@ class StarTellerCLI:
         location_string = f"{lat_rounded},{lon_rounded}"
         return hashlib.md5(location_string.encode()).hexdigest()[:8]
     
-    def _setup_catalog(self, limit, catalog_filter):
+    def _setup_catalog(self, catalog_filter):
         """
         Load and setup the deep sky object catalog.
         
         Args:
-            limit (int): Maximum number of objects to load (None for all)
             catalog_filter (str): Catalog type filter ("messier", "ic", "ngc", "all")
             
         Returns:
@@ -424,7 +422,7 @@ class StarTellerCLI:
         
         try:
             # Load NGC catalog with filter
-            catalog_df = load_ngc_catalog(limit=limit, catalog_filter=catalog_filter)
+            catalog_df = load_ngc_catalog(catalog_filter=catalog_filter)
             
             if catalog_df.empty:
                 print("Failed to load NGC catalog - please ensure NGC.csv file is present")
@@ -1140,123 +1138,6 @@ def get_user_location():
     
     return latitude, longitude, elevation
 
-def create_custom_starteller_cli(latitude, longitude, elevation, object_list):
-    """
-    Create a StarTellerCLI instance with custom object list.
-    
-    Args:
-        latitude (float): Observer latitude
-        longitude (float): Observer longitude  
-        elevation (float): Observer elevation
-        object_list (list): List of object IDs to search for
-        
-            Returns:
-            StarTellerCLI: Instance with custom catalog
-    """
-    try:
-        from .catalog_manager import load_ngc_catalog
-    except ImportError:
-        from catalog_manager import load_ngc_catalog
-    
-    # Load full catalog
-    full_catalog = load_ngc_catalog()
-    
-    if full_catalog.empty:
-        print("Failed to load catalog")
-        return None
-    
-    # Find matching objects
-    custom_catalog = []
-    found_objects = set()
-    found_count = 0
-    
-    for obj_id in object_list:
-        obj_id_upper = obj_id.upper()
-        
-        # Try exact match first
-        matches = full_catalog[full_catalog['object_id'].str.upper() == obj_id_upper]
-        
-        if matches.empty:
-            # Try partial matches (e.g., "M31" matches "M31" object_id)
-            matches = full_catalog[full_catalog['object_id'].str.upper().str.contains(obj_id_upper, na=False)]
-        
-        if matches.empty:
-            # Try searching in names
-            matches = full_catalog[full_catalog['name'].str.upper().str.contains(obj_id_upper, na=False)]
-        
-        if not matches.empty:
-            # Take the first match
-            match = matches.iloc[0]
-            if match['object_id'] not in found_objects:
-                custom_catalog.append(match)
-                found_objects.add(match['object_id'])
-                found_count += 1
-        else:
-            print(f"✗ Object '{obj_id}' not found in catalog")
-    
-    if not custom_catalog:
-        print("No objects found! Using Messier catalog instead.")
-        return StarTellerCLI(latitude, longitude, elevation, catalog_filter="messier")
-    
-    print(f"✓ Found {found_count}/{len(object_list)} custom objects")
-    
-    # Create a custom StarTellerCLI instance
-    st = StarTellerCLI.__new__(StarTellerCLI)
-    st.latitude = latitude
-    st.longitude = longitude
-    st.elevation = elevation
-    
-    # Create location hash for caching
-    st.location_hash = st._generate_location_hash()
-    
-    # Set up location and timing
-    from timezonefinder import TimezoneFinder
-    tf = TimezoneFinder()
-    tz_name = tf.timezone_at(lat=latitude, lng=longitude)
-    if tz_name:
-        st.local_tz = pytz.timezone(tz_name)
-        print(f"✓ Timezone: {tz_name}")
-    else:
-        st.local_tz = pytz.UTC
-        print("✓ Timezone: UTC (could not auto-detect)")
-    
-    # Load astronomical data
-    from skyfield.api import load
-    from skyfield.api import wgs84
-    st.ts = load.timescale()
-    
-    # Set up data directory and ephemeris file path
-    data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
-    os.makedirs(data_dir, exist_ok=True)  # Ensure data directory exists
-    eph_path = os.path.join(data_dir, 'de421.bsp')
-    
-    if os.path.exists(eph_path):
-        st.eph = load(eph_path)  # JPL ephemeris from data folder
-    else:
-        # Download ephemeris to data folder
-        from skyfield.iokit import Loader
-        loader = Loader(data_dir)
-        st.eph = loader('de421.bsp')  # This will download to data/ folder
-    st.earth = st.eph['earth'] 
-    st.sun = st.eph['sun']
-    st.observer = st.earth + wgs84.latlon(latitude, longitude, elevation_m=elevation)
-    
-    # Create custom catalog
-    st.dso_catalog = {}
-    for obj_data in custom_catalog:
-        obj_id = obj_data['object_id']
-        display_name = obj_data.get('common_name', '') or obj_data['name']
-        
-        st.dso_catalog[obj_id] = {
-            'ra': float(obj_data['ra_deg']),
-            'dec': float(obj_data['dec_deg']),
-            'name': display_name,
-            'type': obj_data['type']
-        }
-    
-    print(f"✓ Catalog: {len(st.dso_catalog)} custom objects")
-    return st
-
 def main():
     """Main function to run StarTeller-CLI."""
     print("=" * 60)
@@ -1275,20 +1156,9 @@ def main():
     print("2. IC Objects (~5,000 Index Catalog objects)")
     print("3. NGC Objects (~8,000 New General Catalog objects)")
     print("4. All Objects (~13,000 NGC + IC objects)")
-    print("5. Custom Objects (specify your own list)")
     
-    catalog_choice = input("Enter choice (1-5, default 1): ").strip() or "1"
-    
-    # Handle custom objects
-    custom_objects = None
-    object_list = None
-    if catalog_choice == "5":
-        custom_objects = input("Enter object IDs (comma-separated, e.g., M31,NGC224,IC342): ").strip()
-        if custom_objects:
-            object_list = [obj.strip().upper() for obj in custom_objects.split(',')]
-        else:
-            print("No objects specified, using Messier catalog instead")
-            catalog_choice = "1"
+    catalog_choice = input("Enter choice (1-4, default 1): ").strip() or "1"
+
     
     # Get viewing preferences
     print("\nViewing preferences:")
@@ -1309,18 +1179,15 @@ def main():
     print("=" * 60)
     
     # Create StarTellerCLI instance with appropriate catalog
-    if catalog_choice == "5" and custom_objects:
-        st = create_custom_starteller_cli(latitude, longitude, elevation, object_list)
-    else:
-        catalog_params = {
-            "1": ("messier", 150),      # Messier + some extras to ensure all 110 are included
-            "2": ("ic", 5000),          # IC objects only
-            "3": ("ngc", 8000),         # NGC objects only  
-            "4": ("all", None)          # All objects
-        }
+    catalog_params = {
+        "1": "messier",
+        "2": "ic",
+        "3": "ngc",
+        "4": "all"
+    }
         
-        catalog_type, limit = catalog_params.get(catalog_choice, ("messier", 150))
-        st = StarTellerCLI(latitude, longitude, elevation, limit=limit, catalog_filter=catalog_type)
+    catalog_type = catalog_params.get(catalog_choice)
+    st = StarTellerCLI(latitude, longitude, elevation, catalog_filter=catalog_type)
     
     if st is None:
         print("Failed to create StarTellerCLI instance. Exiting.")

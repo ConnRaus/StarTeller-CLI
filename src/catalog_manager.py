@@ -47,12 +47,11 @@ def download_ngc_catalog(ngc_path):
         print(f"❌ Error downloading NGC.csv: {e}")
         return False
 
-def load_ngc_catalog(limit=None, catalog_filter="all"):
+def load_ngc_catalog(catalog_filter="all"):
     """
     Load NGC/IC catalog from local OpenNGC file.
     
     Args:
-        limit (int): Maximum number of objects to process
         catalog_filter (str): Filter catalog by type ("messier", "ic", "ngc", "all")
         
     Returns:
@@ -101,29 +100,7 @@ def load_ngc_catalog(limit=None, catalog_filter="all"):
             # Only NGC objects
             df = df[df['Name'].str.startswith('NGC')].copy()
         # else: All objects (no filter needed)
-        
-        # Smart sampling if limit is specified and we have more objects than the limit
-        if limit and len(df) > limit:
-            if catalog_filter == "messier":
-                # For Messier catalog, just take the first N
-                df = df.head(limit)
-            else:
-                # For other catalogs, prioritize objects with Messier designations
-                messier_objects = df[df['M'].notna() & (df['M'] != '')].copy()
-                non_messier = df[df['M'].isna() | (df['M'] == '')].copy()
-                
-                if len(messier_objects) > 0:
-                    if len(messier_objects) >= limit:
-                        # If we have enough Messier objects, just use those
-                        df = messier_objects.head(limit)
-                    else:
-                        # Include all Messier objects plus some others
-                        remaining = limit - len(messier_objects)
-                        non_messier_sample = non_messier.head(remaining)
-                        df = pd.concat([messier_objects, non_messier_sample], ignore_index=True)
-                else:
-                    # No Messier objects in this catalog, just take first N
-                    df = df.head(limit)
+
         
         # Parse coordinates from HMS/DMS to decimal degrees
         def parse_coordinate(coord_str, is_ra=False):
@@ -271,7 +248,6 @@ def load_ngc_catalog(limit=None, catalog_filter="all"):
         return pd.DataFrame()
 
 if __name__ == "__main__":
-    # Simple test - load without limit to show full catalog
     catalog = load_ngc_catalog()
     if not catalog.empty:
         print(f"\nSuccessfully loaded {len(catalog)} objects from OpenNGC!")
