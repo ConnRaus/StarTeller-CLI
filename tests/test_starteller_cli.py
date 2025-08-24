@@ -17,7 +17,7 @@ from datetime import datetime, date
 # Add src directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from starteller_cli import StarTellerCLI, get_user_location, create_custom_starteller_cli
+from starteller_cli import StarTellerCLI, get_user_location
 try:
     from src.catalog_manager import load_ngc_catalog, download_ngc_catalog
 except ImportError:
@@ -111,7 +111,7 @@ NGC0221;G;00:42:41.83;+40:51:54.6;And;8.5;6.5;168;8.08;;;;;;;;;;;;;;32;;;;;NGC 2
     def test_messier_filter(self):
         """Test Messier catalog filtering."""
         # Test that Messier filtering works with the real catalog
-        catalog = load_ngc_catalog(catalog_filter="messier", limit=10)
+        catalog = load_ngc_catalog(catalog_filter="messier")
         
         # Should either have Messier objects or be empty
         if not catalog.empty:
@@ -125,7 +125,7 @@ NGC0221;G;00:42:41.83;+40:51:54.6;And;8.5;6.5;168;8.08;;;;;;;;;;;;;;32;;;;;NGC 2
     def test_ngc_filter(self):
         """Test NGC catalog filtering."""
         # Simple test - just verify NGC filtering works with real data
-        catalog = load_ngc_catalog(catalog_filter="ngc", limit=5)
+        catalog = load_ngc_catalog(catalog_filter="ngc")
         
         if not catalog.empty:
             ngc_objects = catalog[catalog['object_id'].str.startswith('NGC')]
@@ -135,19 +135,12 @@ NGC0221;G;00:42:41.83;+40:51:54.6;And;8.5;6.5;168;8.08;;;;;;;;;;;;;;32;;;;;NGC 2
     def test_ic_filter(self):
         """Test IC catalog filtering.""" 
         # Simple test - just verify IC filtering works with real data
-        catalog = load_ngc_catalog(catalog_filter="ic", limit=5)
+        catalog = load_ngc_catalog(catalog_filter="ic")
         
         if not catalog.empty:
             ic_objects = catalog[catalog['object_id'].str.startswith('IC')]
             # Should have some IC objects if catalog is not empty
             self.assertGreaterEqual(len(ic_objects), 0)
-    
-    def test_limit_functionality(self):
-        """Test catalog limit functionality."""
-        catalog = load_ngc_catalog(limit=5)
-        
-        # Should respect the limit (or be empty if no data)
-        self.assertLessEqual(len(catalog), 20)  # Allow for Messier cross-references
 
 
 class TestStarTellerCLICaching(unittest.TestCase):
@@ -156,7 +149,7 @@ class TestStarTellerCLICaching(unittest.TestCase):
     def setUp(self):
         """Set up test environment."""
         self.test_cache_dir = tempfile.mkdtemp()
-        self.st = StarTellerCLI(40.7, -74.0, elevation=50, limit=10, catalog_filter="messier")
+        self.st = StarTellerCLI(40.7, -74.0, elevation=50, catalog_filter="messier")
         # Override cache directory for testing
         self.original_get_cache_filepath = self.st._get_cache_filepath
         
@@ -236,7 +229,7 @@ class TestStarTellerCLIFunctionality(unittest.TestCase):
     def setUp(self):
         """Set up test StarTellerCLI instance."""
         self.test_cache_dir = tempfile.mkdtemp()
-        self.st = StarTellerCLI(40.7, -74.0, elevation=50, limit=20, catalog_filter="messier")
+        self.st = StarTellerCLI(40.7, -74.0, elevation=50, catalog_filter="messier")
         
         # Override cache directory for testing
         self.original_get_cache_filepath = self.st._get_cache_filepath
@@ -266,7 +259,7 @@ class TestStarTellerCLIFunctionality(unittest.TestCase):
         hash1 = self.st._generate_location_hash()
         
         # Same location should produce same hash
-        st2 = StarTellerCLI(40.7, -74.0, elevation=100, limit=10)  # Different elevation shouldn't matter for hash
+        st2 = StarTellerCLI(40.7, -74.0, elevation=100)  # Different elevation shouldn't matter for hash
         # Mock cache directory for st2
         def mock_get_cache_filepath_st2(year=None):
             if year is None:
@@ -279,7 +272,7 @@ class TestStarTellerCLIFunctionality(unittest.TestCase):
         self.assertEqual(hash1, hash2)
         
         # Different location should produce different hash
-        st3 = StarTellerCLI(41.0, -74.0, elevation=50, limit=10)
+        st3 = StarTellerCLI(41.0, -74.0, elevation=50)
         # Mock cache directory for st3
         def mock_get_cache_filepath_st3(year=None):
             if year is None:
@@ -357,35 +350,6 @@ class TestStarTellerCLICustomObjects(unittest.TestCase):
         
         st._get_cache_filepath = mock_get_cache_filepath
         return original_get_cache_filepath
-    
-    def test_create_custom_starteller_cli(self):
-        """Test creating StarTellerCLI with custom objects."""
-        custom_objects = ['M31', 'M32', 'M42']
-        
-        st = create_custom_starteller_cli(40.7, -74.0, 50, custom_objects)
-        self._mock_cache_dir(st)
-        
-        self.assertIsNotNone(st)
-        self.assertGreater(len(st.dso_catalog), 0)
-        
-        # Check that requested objects are present
-        found_objects = list(st.dso_catalog.keys())
-        for obj in custom_objects:
-            # Object might be found under different names, so just check we have some objects
-            pass
-        self.assertGreater(len(found_objects), 0)
-    
-    def test_custom_objects_not_found(self):
-        """Test behavior when custom objects aren't found."""
-        custom_objects = ['INVALID123', 'NOTREAL456']
-        
-        # Should fall back to Messier catalog
-        st = create_custom_starteller_cli(40.7, -74.0, 50, custom_objects)
-        self._mock_cache_dir(st)
-        
-        self.assertIsNotNone(st)
-        # Should have fallen back to Messier catalog
-        self.assertGreater(len(st.dso_catalog), 0)
 
 
 class TestStarTellerCLIErrorHandling(unittest.TestCase):
@@ -416,7 +380,7 @@ class TestStarTellerCLIErrorHandling(unittest.TestCase):
         """Test handling of invalid coordinates."""
         # These should still work but may have limited functionality
         try:
-            st = StarTellerCLI(91.0, 181.0, elevation=50, limit=5)  # Invalid lat/lon
+            st = StarTellerCLI(91.0, 181.0, elevation=50)  # Invalid lat/lon
             self._mock_cache_dir(st)
             # Should still initialize but may have issues with timezone
             self.assertIsNotNone(st)
@@ -427,7 +391,7 @@ class TestStarTellerCLIErrorHandling(unittest.TestCase):
     def test_empty_catalog(self):
         """Test handling of empty catalog."""
         # Create a StarTellerCLI with very restrictive filters to get minimal objects
-        st = StarTellerCLI(40.7, -74.0, elevation=50, limit=1, catalog_filter="ic")
+        st = StarTellerCLI(40.7, -74.0, elevation=50, catalog_filter="ic")
         self._mock_cache_dir(st)
         
         # Should handle small/empty catalog gracefully
@@ -441,7 +405,7 @@ class TestStarTellerCLIErrorHandling(unittest.TestCase):
     
     def test_corrupted_cache(self):
         """Test handling of corrupted cache files."""
-        st = StarTellerCLI(40.7, -74.0, elevation=50, limit=5)
+        st = StarTellerCLI(40.7, -74.0, elevation=50)
         self._mock_cache_dir(st)
         
         # Create a corrupted cache file
@@ -515,7 +479,7 @@ def quick_integration_test():
     
     try:
         # Test basic functionality
-        st = StarTellerCLI(40.7, -74.0, elevation=50, limit=10, catalog_filter="messier")
+        st = StarTellerCLI(40.7, -74.0, elevation=50, catalog_filter="messier")
         
         # Override cache directory for testing
         def mock_get_cache_filepath(year=None):
