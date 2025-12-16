@@ -46,7 +46,7 @@ def download_ngc_catalog(ngc_path):
         
         # Download the file
         urllib.request.urlretrieve(url, str(ngc_path))
-        
+    
         # Verify the file was downloaded and has content
         if ngc_file.exists() and ngc_file.stat().st_size > 1000:  # At least 1KB
             print(f"✅ Successfully downloaded NGC.csv ({ngc_file.stat().st_size/1024:.0f} KB)")
@@ -62,9 +62,51 @@ def download_ngc_catalog(ngc_path):
         print(f"❌ Error downloading NGC.csv: {e}")
         return False
 
+def download_addendum_catalog(addendum_path):
+    """
+    Automatically download the addendum.csv file from OpenNGC GitHub repository.
+    
+    Args:
+        addendum_path (str): Path where the file should be saved
+        
+    Returns:
+        bool: True if download successful, False otherwise
+    """
+    url = "https://raw.githubusercontent.com/mattiaverga/OpenNGC/refs/heads/master/database_files/addendum.csv"
+    
+    try:
+        print("📥 addendum.csv not found - downloading from OpenNGC repository...")
+        print(f"   Downloading from: {url}")
+        
+        # Ensure the directory exists
+        addendum_file = Path(addendum_path)
+        addendum_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Download the file
+        urllib.request.urlretrieve(url, str(addendum_path))
+    
+        # Verify the file was downloaded and has content
+        if addendum_file.exists() and addendum_file.stat().st_size > 100:  # At least 100 bytes (smaller file)
+            print(f"✅ Successfully downloaded addendum.csv ({addendum_file.stat().st_size/1024:.1f} KB)")
+            return True
+        else:
+            print("❌ Download failed - file is empty or corrupted")
+            return False
+            
+    except urllib.error.URLError as e:
+        print(f"❌ Network error downloading addendum.csv: {e}")
+        return False
+    except Exception as e:
+        print(f"❌ Error downloading addendum.csv: {e}")
+        return False
+
 def load_ngc_catalog(catalog_filter="all"):
     """
-    Load NGC/IC catalog from local OpenNGC file.
+    Load NGC/IC catalog from local OpenNGC file, including addendum objects.
+    
+    The addendum includes additional objects from various catalogs:
+    - Caldwell (C), Barnard (B), UGC, PGC, ESO, Harvard (H), Melotte (Mel),
+      MWSC, HCG, and Cl objects. When filter is "all", these are included.
     
     Args:
         catalog_filter (str): Filter catalog by type ("messier", "ic", "ngc", "all")
@@ -105,6 +147,22 @@ def load_ngc_catalog(catalog_filter="all"):
         # Filter for NGC and IC objects with coordinates
         df = df[df['Name'].str.match(r'^(NGC|IC)\d+$', na=False)]
         df = df.dropna(subset=['RA', 'Dec'])
+        
+        # Load addendum catalog if available
+        addendum_path = user_data_dir / 'addendum.csv'
+        if not addendum_path.exists():
+            download_addendum_catalog(str(addendum_path))
+        
+        if addendum_path.exists():
+            try:
+                addendum_df = pd.read_csv(str(addendum_path), sep=';', low_memory=False)
+                # Filter for objects with coordinates
+                addendum_df = addendum_df.dropna(subset=['RA', 'Dec'])
+                # Concatenate with main catalog
+                df = pd.concat([df, addendum_df], ignore_index=True)
+            except Exception as e:
+                print(f"⚠️  Warning: Could not load addendum.csv: {e}")
+                print("   Continuing with NGC/IC catalog only...")
         
         # Apply catalog filter
         if catalog_filter == "messier":
@@ -154,16 +212,18 @@ def load_ngc_catalog(catalog_filter="all"):
         # Remove entries with failed coordinate conversion
         df = df.dropna(subset=['ra_deg', 'dec_deg'])
         
-        # Expand object types (based on actual NGC.csv data)
+        # Expand object types (based on actual NGC.csv data and addendum)
         type_expansions = {
             'G': 'Galaxy',
             'SNR': 'Supernova remnant',
             'GCl': 'Globular cluster',
+            'GCI': 'Globular cluster',
             'OCl': 'Open cluster',
             'Neb': 'Nebula',
             'HII': 'HII region',
             'PN': 'Planetary nebula',
             'RfN': 'Reflection nebula',
+            'DrkN': 'Dark nebula',
             '**': 'Double star',
             '*': 'Star',
             '*Ass': 'Stellar association',
@@ -185,13 +245,68 @@ def load_ngc_catalog(catalog_filter="all"):
         
         # Create standardized catalog with clean names
         def clean_name(name):
-            """Convert NGC0221 to NGC 221 (remove leading zeros)"""
+            """Convert NGC0221 to NGC 221 (remove leading zeros), handle other catalog prefixes"""
             import re
+            # Handle NGC/IC objects
             match = re.match(r'^(NGC|IC)(\d+)$', name)
             if match:
                 prefix = match.group(1)
                 number = int(match.group(2))  # Convert to int to remove leading zeros
                 return f"{prefix} {number}"
+            # Handle Caldwell objects (C009 -> C 9)
+            match = re.match(r'^C(\d+)$', name)
+            if match:
+                number = int(match.group(1))
+                return f"C {number}"
+            # Handle Barnard objects (B033 -> B 33)
+            match = re.match(r'^B(\d+)$', name)
+            if match:
+                number = int(match.group(1))
+                return f"B {number}"
+            # Handle Harvard objects (H05 -> H 5)
+            match = re.match(r'^H(\d+)$', name)
+            if match:
+                number = int(match.group(1))
+                return f"H {number}"
+            # Handle Melotte objects (Mel022 -> Mel 22)
+            match = re.match(r'^Mel(\d+)$', name)
+            if match:
+                number = int(match.group(1))
+                return f"Mel {number}"
+            # Handle UGC objects (UGC04305 -> UGC 4305)
+            match = re.match(r'^UGC(\d+)$', name)
+            if match:
+                number = int(match.group(1))
+                return f"UGC {number}"
+            # Handle PGC objects (PGC000143 -> PGC 143)
+            match = re.match(r'^PGC(\d+)$', name)
+            if match:
+                number = int(match.group(1))
+                return f"PGC {number}"
+            # Handle MWSC objects (MWSC3156 -> MWSC 3156)
+            match = re.match(r'^MWSC(\d+)$', name)
+            if match:
+                number = int(match.group(1))
+                return f"MWSC {number}"
+            # Handle HCG objects (HCG079 -> HCG 79)
+            match = re.match(r'^HCG(\d+)$', name)
+            if match:
+                number = int(match.group(1))
+                return f"HCG {number}"
+            # Handle ESO objects (ESO056-115 -> ESO 056-115)
+            match = re.match(r'^ESO(\d+)-(\d+)$', name)
+            if match:
+                return f"ESO {match.group(1)}-{match.group(2)}"
+            # Handle Cl objects (Cl399 -> Cl 399)
+            match = re.match(r'^Cl(\d+)$', name)
+            if match:
+                number = int(match.group(1))
+                return f"Cl {number}"
+            # Handle M objects (M040 -> M 40)
+            match = re.match(r'^M(\d+)$', name)
+            if match:
+                number = int(match.group(1))
+                return f"M {number}"
             return name
         
         catalog_df = pd.DataFrame({
@@ -242,18 +357,68 @@ def load_ngc_catalog(catalog_filter="all"):
         def sort_key(name):
             import re
             # Handle Messier objects first
-            messier_match = re.match(r'M(\d+)', name)
+            messier_match = re.match(r'^M(\d+)$', name)
             if messier_match:
-                return (0, int(messier_match.group(1)))  # Messier objects first
+                return (0, int(messier_match.group(1)), 0)  # Messier objects first
             
             # Handle NGC/IC objects
-            ngc_match = re.match(r'(NGC|IC)(\d+)', name)
+            ngc_match = re.match(r'^(NGC|IC)(\d+)$', name)
             if ngc_match:
                 prefix = ngc_match.group(1)
                 number = int(ngc_match.group(2))
-                return (1 if prefix == 'NGC' else 2, number)
+                return (1 if prefix == 'NGC' else 2, number, 0)
             
-            return (3, 99999)  # Everything else last
+            # Handle Caldwell objects
+            caldwell_match = re.match(r'^C(\d+)$', name)
+            if caldwell_match:
+                return (3, int(caldwell_match.group(1)), 0)
+            
+            # Handle Barnard objects
+            barnard_match = re.match(r'^B(\d+)$', name)
+            if barnard_match:
+                return (4, int(barnard_match.group(1)), 0)
+            
+            # Handle UGC objects
+            ugc_match = re.match(r'^UGC(\d+)$', name)
+            if ugc_match:
+                return (5, int(ugc_match.group(1)), 0)
+            
+            # Handle PGC objects
+            pgc_match = re.match(r'^PGC(\d+)$', name)
+            if pgc_match:
+                return (6, int(pgc_match.group(1)), 0)
+            
+            # Handle ESO objects
+            eso_match = re.match(r'^ESO(\d+)-(\d+)$', name)
+            if eso_match:
+                return (7, int(eso_match.group(1)), int(eso_match.group(2)))
+            
+            # Handle Harvard objects
+            harvard_match = re.match(r'^H(\d+)$', name)
+            if harvard_match:
+                return (8, int(harvard_match.group(1)), 0)
+            
+            # Handle Melotte objects
+            mel_match = re.match(r'^Mel(\d+)$', name)
+            if mel_match:
+                return (9, int(mel_match.group(1)), 0)
+            
+            # Handle MWSC objects
+            mwsc_match = re.match(r'^MWSC(\d+)$', name)
+            if mwsc_match:
+                return (10, int(mwsc_match.group(1)), 0)
+            
+            # Handle HCG objects
+            hcg_match = re.match(r'^HCG(\d+)$', name)
+            if hcg_match:
+                return (11, int(hcg_match.group(1)), 0)
+            
+            # Handle Cl objects
+            cl_match = re.match(r'^Cl(\d+)$', name)
+            if cl_match:
+                return (12, int(cl_match.group(1)), 0)
+            
+            return (99, 99999, 0)  # Everything else last
         
         catalog_df['sort_key'] = catalog_df['object_id'].apply(sort_key)
         catalog_df = catalog_df.sort_values('sort_key').drop('sort_key', axis=1)
