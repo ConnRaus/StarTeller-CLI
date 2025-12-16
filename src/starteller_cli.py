@@ -134,13 +134,8 @@ def _init_worker(latitude, longitude, elevation, eph_path, t_array_data,
     global _worker_night_dark_start_ts, _worker_night_dark_end_ts
     global _worker_local_tz, _worker_local_tz_str
     
-    import time
-    import os
-    t0 = time.perf_counter()
-    
     from datetime import date
     import numpy as np
-    t_imports = time.perf_counter()
     
     # Store observer location
     _worker_latitude = latitude
@@ -149,27 +144,20 @@ def _init_worker(latitude, longitude, elevation, eph_path, t_array_data,
     # Initialize timezone
     _worker_local_tz_str = local_tz_str
     _worker_local_tz = pytz.timezone(local_tz_str)
-    t_tz = time.perf_counter()
     
     # Convert Unix timestamps to Julian dates and pre-calculate LST
     # This is the ONLY calculation we need - no ephemeris required!
     t_array_np = np.asarray(t_array_data)
     jd_array = t_array_np / 86400.0 + 2440587.5
     _worker_lst_array = _calculate_lst(jd_array, longitude)
-    t_lst = time.perf_counter()
     
     # Reconstruct dates from (year, month, day) tuples
     _worker_night_dates = [date(y, m, d) for y, m, d in night_dates_tuples]
-    t_dates = time.perf_counter()
     
     # Store timestamps directly - create datetime objects on-demand in worker function
     _worker_night_midpoint_ts = night_midpoint_ts
     _worker_night_dark_start_ts = night_dark_start_ts
     _worker_night_dark_end_ts = night_dark_end_ts
-    
-    # Print timing from first worker only
-    pid = os.getpid()
-    print(f"    [Worker {pid}] imports={t_imports-t0:.3f}s, tz={t_tz-t_imports:.3f}s, lst={t_lst-t_tz:.3f}s, dates={t_dates-t_lst:.3f}s, total={t_dates-t0:.3f}s")
 
 def _process_object_worker(args):
     """Worker function to process a single object (runs in subprocess)."""
@@ -220,20 +208,20 @@ def _process_object_worker(args):
         best_dark_start = datetime.fromtimestamp(_worker_night_dark_start_ts[best_idx], tz=_worker_local_tz)
         best_dark_end = datetime.fromtimestamp(_worker_night_dark_end_ts[best_idx], tz=_worker_local_tz)
         
-        # Calculate rise/set times using fast numpy approach
+        # Calculate rise/set times by sampling altitude throughout the dark period
         start_ts = _worker_night_dark_start_ts[best_idx]
         end_ts = _worker_night_dark_end_ts[best_idx]
         
-        # Convert timestamps to Julian dates and calculate LST
-        jd_endpoints = np.array([start_ts, end_ts]) / 86400.0 + 2440587.5
-        lst_endpoints = _calculate_lst(jd_endpoints, _worker_longitude)
+        # Sample 48 points throughout the night (every ~15 minutes for a 12-hour night)
+        num_samples = 48
+        sample_ts = np.linspace(start_ts, end_ts, num_samples)
+        jd_samples = sample_ts / 86400.0 + 2440587.5
+        lst_samples = _calculate_lst(jd_samples, _worker_longitude)
         
-        # Calculate alt/az at start and end of dark period
-        endpoint_alt, endpoint_az = _calc_alt_az_fast(ra, dec, lst_endpoints, lat_rad)
+        # Calculate altitude at all sample points
+        sample_alt, sample_az = _calc_alt_az_fast(ra, dec, lst_samples, lat_rad)
         
-        start_alt, end_alt = endpoint_alt[0], endpoint_alt[1]
-        start_az, end_az = endpoint_az[0], endpoint_az[1]
-        
+        # Apply direction filter if specified
         def meets_dir(az):
             if direction_filter is None:
                 return True
@@ -242,34 +230,95 @@ def _process_object_worker(args):
                 return min_az <= az <= max_az
             return az >= min_az or az <= max_az
         
-        start_visible = (start_alt >= min_altitude and meets_dir(start_az))
-        end_visible = (end_alt >= min_altitude and meets_dir(end_az))
+        # Find visibility mask
+        visible = (sample_alt >= min_altitude)
+        if direction_filter:
+            dir_ok = np.array([meets_dir(az) for az in sample_az])
+            visible = visible & dir_ok
         
-        # Simplified rise/set
-        if start_visible and end_visible:
+        # Find rise and set times by looking for transitions
+        rise_idx = None
+        set_idx = None
+        
+        # Find first transition from not-visible to visible (rise)
+        for i in range(len(visible) - 1):
+            if not visible[i] and visible[i + 1]:
+                rise_idx = i + 1
+                break
+        
+        # Find last transition from visible to not-visible (set)
+        for i in range(len(visible) - 1, 0, -1):
+            if visible[i - 1] and not visible[i]:
+                set_idx = i - 1
+                break
+        
+        # Determine rise/set times and directions
+        dark_duration_hours = (best_dark_end - best_dark_start).total_seconds() / 3600
+        
+        if visible[0] and visible[-1]:
+            # Visible entire night
             rise_time = best_dark_start.strftime('%H:%M')
             set_time = best_dark_end.strftime('%H:%M')
-            rise_dir = _azimuth_to_cardinal(start_az)
-            set_dir = _azimuth_to_cardinal(end_az)
-            duration = round((best_dark_end - best_dark_start).total_seconds() / 3600, 1)
-        elif start_visible:
+            rise_dir = _azimuth_to_cardinal(sample_az[0])
+            set_dir = _azimuth_to_cardinal(sample_az[-1])
+            duration = round(dark_duration_hours, 1)
+        elif visible[0]:
+            # Visible at start, sets during night
             rise_time = best_dark_start.strftime('%H:%M')
-            set_time = '~' + best_dark_end.strftime('%H:%M')
-            rise_dir = _azimuth_to_cardinal(start_az)
-            set_dir = _azimuth_to_cardinal(end_az)
-            duration = round((best_dark_end - best_dark_start).total_seconds() / 3600 * 0.5, 1)
-        elif end_visible:
-            rise_time = '~' + best_dark_start.strftime('%H:%M')
+            rise_dir = _azimuth_to_cardinal(sample_az[0])
+            if set_idx is not None:
+                set_datetime = datetime.fromtimestamp(sample_ts[set_idx], tz=_worker_local_tz)
+                set_time = set_datetime.strftime('%H:%M')
+                set_dir = _azimuth_to_cardinal(sample_az[set_idx])
+                duration = round((set_datetime - best_dark_start).total_seconds() / 3600, 1)
+            else:
+                set_time = best_dark_end.strftime('%H:%M')
+                set_dir = _azimuth_to_cardinal(sample_az[-1])
+                duration = round(dark_duration_hours, 1)
+        elif visible[-1]:
+            # Rises during night, visible at end
             set_time = best_dark_end.strftime('%H:%M')
-            rise_dir = _azimuth_to_cardinal(start_az)
-            set_dir = _azimuth_to_cardinal(end_az)
-            duration = round((best_dark_end - best_dark_start).total_seconds() / 3600 * 0.5, 1)
+            set_dir = _azimuth_to_cardinal(sample_az[-1])
+            if rise_idx is not None:
+                rise_datetime = datetime.fromtimestamp(sample_ts[rise_idx], tz=_worker_local_tz)
+                rise_time = rise_datetime.strftime('%H:%M')
+                rise_dir = _azimuth_to_cardinal(sample_az[rise_idx])
+                duration = round((best_dark_end - rise_datetime).total_seconds() / 3600, 1)
+            else:
+                rise_time = best_dark_start.strftime('%H:%M')
+                rise_dir = _azimuth_to_cardinal(sample_az[0])
+                duration = round(dark_duration_hours, 1)
         else:
-            rise_time = 'N/A'
-            set_time = 'N/A'
-            rise_dir = 'N/A'
-            set_dir = 'N/A'
-            duration = 0
+            # Object rises AND sets during the night
+            if rise_idx is not None and set_idx is not None:
+                rise_datetime = datetime.fromtimestamp(sample_ts[rise_idx], tz=_worker_local_tz)
+                set_datetime = datetime.fromtimestamp(sample_ts[set_idx], tz=_worker_local_tz)
+                rise_time = rise_datetime.strftime('%H:%M')
+                set_time = set_datetime.strftime('%H:%M')
+                rise_dir = _azimuth_to_cardinal(sample_az[rise_idx])
+                set_dir = _azimuth_to_cardinal(sample_az[set_idx])
+                duration = round((set_datetime - rise_datetime).total_seconds() / 3600, 1)
+            elif rise_idx is not None:
+                rise_datetime = datetime.fromtimestamp(sample_ts[rise_idx], tz=_worker_local_tz)
+                rise_time = rise_datetime.strftime('%H:%M')
+                rise_dir = _azimuth_to_cardinal(sample_az[rise_idx])
+                set_time = best_dark_end.strftime('%H:%M')
+                set_dir = _azimuth_to_cardinal(sample_az[-1])
+                duration = round((best_dark_end - rise_datetime).total_seconds() / 3600, 1)
+            elif set_idx is not None:
+                set_datetime = datetime.fromtimestamp(sample_ts[set_idx], tz=_worker_local_tz)
+                rise_time = best_dark_start.strftime('%H:%M')
+                rise_dir = _azimuth_to_cardinal(sample_az[0])
+                set_time = set_datetime.strftime('%H:%M')
+                set_dir = _azimuth_to_cardinal(sample_az[set_idx])
+                duration = round((set_datetime - best_dark_start).total_seconds() / 3600, 1)
+            else:
+                # Fallback - shouldn't happen if object is visible at midpoint
+                rise_time = best_midpoint.strftime('%H:%M')
+                set_time = best_midpoint.strftime('%H:%M')
+                rise_dir = _azimuth_to_cardinal(best_azimuth)
+                set_dir = _azimuth_to_cardinal(best_azimuth)
+                duration = round(np.sum(visible) / num_samples * dark_duration_hours, 1)
         
         # Return as tuple (much faster to serialize than dict!)
         return (obj_id, name, obj_type, best_date, best_midpoint.strftime('%H:%M'),
