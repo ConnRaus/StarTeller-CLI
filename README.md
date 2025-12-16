@@ -46,19 +46,27 @@ Results go to `starteller_output/` in your current directory. The CSV includes:
 | Type | Galaxy, Nebula, Cluster, etc. |
 | Best_Date | Date when object is highest at midnight |
 | Best_Time_Local | Time of peak altitude |
-| Max_Altitude_deg | How high it gets |
+| Max_Altitude_deg | Maximum altitude reached |
+| Azimuth_deg | Azimuth angle at peak altitude |
 | Direction | Cardinal direction (N, NE, E, etc.) |
 | Rise_Time_Local | When it rises above your minimum altitude |
-| Set_Time_Local | When it drops below |
+| Rise_Direction | Direction it rises from |
+| Set_Time_Local | When it drops below minimum altitude |
+| Set_Direction | Direction it sets toward |
 | Observing_Duration_Hours | Total time above minimum altitude |
+| Dark_Nights_Per_Year | Number of nights with astronomical darkness |
+| Good_Viewing_Periods | Number of good viewing periods |
+| Dark_Start_Local | Start of astronomical darkness |
+| Dark_End_Local | End of astronomical darkness |
+| Timezone | Timezone used for local times |
 
 ## Options
 
 **Catalogs:**
-- Messier (~110 objects) - the famous ones
+- Messier (~110 objects)
 - NGC (~8,000 objects)
 - IC (~5,000 objects)
-- All (~13,000 objects) - default
+- All (~13,000 objects)
 
 **Filters:**
 - Minimum altitude (default 20°)
