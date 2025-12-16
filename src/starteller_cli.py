@@ -7,9 +7,11 @@ A command-line tool to find the best times to observe deep sky objects throughou
 import os
 import pickle
 import hashlib
+import sys
 import warnings
 from datetime import datetime, timedelta
 from multiprocessing import Pool, cpu_count
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -27,6 +29,40 @@ warnings.filterwarnings('ignore')
 # Process counts for parallel operations
 NUM_WORKERS = cpu_count() or 8
 NIGHT_MIDPOINT_WORKERS = 2
+
+
+def get_user_data_dir():
+    """Get platform-specific user data directory for StarTeller-CLI."""
+    if sys.platform == 'win32':
+        # Windows: %LOCALAPPDATA%\StarTeller-CLI
+        base = os.environ.get('LOCALAPPDATA', os.path.expanduser('~'))
+        return Path(base) / 'StarTeller-CLI'
+    elif sys.platform == 'darwin':
+        # macOS: ~/Library/Application Support/StarTeller-CLI
+        return Path.home() / 'Library' / 'Application Support' / 'StarTeller-CLI'
+    else:
+        # Linux: ~/.local/share/starteller-cli
+        return Path.home() / '.local' / 'share' / 'starteller-cli'
+
+
+def get_cache_dir():
+    """Get platform-specific cache directory for StarTeller-CLI."""
+    if sys.platform == 'win32':
+        # Windows: %LOCALAPPDATA%\StarTeller-CLI\cache
+        return get_user_data_dir() / 'cache'
+    elif sys.platform == 'darwin':
+        # macOS: ~/Library/Caches/StarTeller-CLI
+        return Path.home() / 'Library' / 'Caches' / 'StarTeller-CLI'
+    else:
+        # Linux: ~/.cache/starteller-cli
+        return Path.home() / '.cache' / 'starteller-cli'
+
+
+def get_output_dir():
+    """Get output directory - defaults to current working directory."""
+    # Output CSV files go to current directory by default
+    # User can change directory before running if they want
+    return Path.cwd() / 'starteller_output'
 
 # Global variables for worker processes (initialized once per worker)
 _worker_latitude = None
@@ -667,9 +703,9 @@ class StarTellerCLI:
         """Get the cache filepath for night midpoints."""
         if year is None:
             year = datetime.now().year
-        cache_dir = os.path.join(os.path.dirname(__file__), '..', 'user_data', 'cache')
-        os.makedirs(cache_dir, exist_ok=True)
-        return os.path.join(cache_dir, f"night_midpoints_{self.location_hash}_{year}.pkl")
+        cache_dir = get_cache_dir()
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        return cache_dir / f"night_midpoints_{self.location_hash}_{year}.pkl"
     
     def _save_cache(self, night_midpoints, year):
         """Save night midpoints to cache file."""
@@ -684,7 +720,7 @@ class StarTellerCLI:
                 'created_date': datetime.now().isoformat()
             }
             
-            with open(cache_file, 'wb') as f:
+            with open(str(cache_file), 'wb') as f:
                 pickle.dump(cache_data, f)
             
             return True
@@ -696,10 +732,10 @@ class StarTellerCLI:
         """Load night midpoints from cache file."""
         try:
             cache_file = self._get_cache_filepath(year)
-            if not os.path.exists(cache_file):
+            if not cache_file.exists():
                 return None
             
-            with open(cache_file, 'rb') as f:
+            with open(str(cache_file), 'rb') as f:
                 cache_data = pickle.load(f)
             
             # Verify the cache is for the same location and timezone
@@ -724,21 +760,19 @@ class StarTellerCLI:
         Args:
             action (str): "status" to show cache info, "clear" to delete cache files
         """
-        cache_dir = os.path.join(os.path.dirname(__file__), '..', 'user_data', 'cache')
+        cache_dir = get_cache_dir()
         
         if action == "status":
             print(f"\nCache Status for Location: {self.latitude:.4f}°, {self.longitude:.4f}°")
             print(f"Location Hash: {self.location_hash}")
+            print(f"Cache Directory: {cache_dir}")
             
-            if not os.path.exists(cache_dir):
+            if not cache_dir.exists():
                 print("No cache directory found.")
                 return
             
             # Find cache files for this location
-            cache_files = []
-            for filename in os.listdir(cache_dir):
-                if filename.startswith(f"night_midpoints_{self.location_hash}_"):
-                    cache_files.append(filename)
+            cache_files = list(cache_dir.glob(f"night_midpoints_{self.location_hash}_*.pkl"))
             
             if not cache_files:
                 print("No cached night midpoints found for this location.")
@@ -746,17 +780,16 @@ class StarTellerCLI:
             
             print(f"Found {len(cache_files)} cached year(s):")
             total_size = 0
-            for filename in sorted(cache_files):
-                filepath = os.path.join(cache_dir, filename)
-                file_size = os.path.getsize(filepath)
+            for cache_file in sorted(cache_files):
+                file_size = cache_file.stat().st_size
                 total_size += file_size
                 
                 # Extract year from filename
-                year = filename.split('_')[-1].replace('.pkl', '')
+                year = cache_file.stem.split('_')[-1]
                 
                 # Get creation date
                 try:
-                    with open(filepath, 'rb') as f:
+                    with open(str(cache_file), 'rb') as f:
                         cache_data = pickle.load(f)
                     created_date = cache_data.get('created_date', 'Unknown')
                     nights_count = len(cache_data.get('night_midpoints', []))
@@ -767,21 +800,20 @@ class StarTellerCLI:
             print(f"Total cache size: {total_size/1024:.1f} KB")
             
         elif action == "clear":
-            if not os.path.exists(cache_dir):
+            if not cache_dir.exists():
                 print("No cache directory found.")
                 return
             
             # Find and delete cache files for this location
+            cache_files = list(cache_dir.glob(f"night_midpoints_{self.location_hash}_*.pkl"))
             deleted_count = 0
-            for filename in os.listdir(cache_dir):
-                if filename.startswith(f"night_midpoints_{self.location_hash}_"):
-                    filepath = os.path.join(cache_dir, filename)
-                    try:
-                        os.remove(filepath)
-                        deleted_count += 1
-                        print(f"Deleted: {filename}")
-                    except Exception as e:
-                        print(f"Error deleting {filename}: {e}")
+            for cache_file in cache_files:
+                try:
+                    cache_file.unlink()
+                    deleted_count += 1
+                    print(f"Deleted: {cache_file.name}")
+                except Exception as e:
+                    print(f"Error deleting {cache_file.name}: {e}")
             
             if deleted_count == 0:
                 print("No cache files found for this location.")
@@ -1208,12 +1240,11 @@ class StarTellerCLI:
 def save_location(latitude, longitude, elevation):
     """Save user location to a file."""
     try:
-        # Ensure user_data directory exists
-        user_data_dir = os.path.join(os.path.dirname(__file__), '..', 'user_data')
-        os.makedirs(user_data_dir, exist_ok=True)
+        user_data_dir = get_user_data_dir()
+        user_data_dir.mkdir(parents=True, exist_ok=True)
         
-        location_file = os.path.join(user_data_dir, 'user_location.txt')
-        with open(location_file, 'w') as f:
+        location_file = user_data_dir / 'user_location.txt'
+        with open(str(location_file), 'w') as f:
             f.write(f"{latitude},{longitude},{elevation}")
         print(f"✓ Location saved: {latitude:.2f}°, {longitude:.2f}°, {elevation}m")
     except Exception as e:
@@ -1222,8 +1253,10 @@ def save_location(latitude, longitude, elevation):
 def load_location():
     """Load user location from file."""
     try:
-        location_file = os.path.join(os.path.dirname(__file__), '..', 'user_data', 'user_location.txt')
-        with open(location_file, 'r') as f:
+        location_file = get_user_data_dir() / 'user_location.txt'
+        if not location_file.exists():
+            return None
+        with open(str(location_file), 'r') as f:
             data = f.read().strip().split(',')
             if len(data) == 3:
                 latitude = float(data[0])
@@ -1319,12 +1352,12 @@ def main():
     
     # === SAVE RESULTS ===
     
-    # Ensure output directory exists
-    output_dir = os.path.join(os.path.dirname(__file__), '..', 'output')
-    os.makedirs(output_dir, exist_ok=True)
+    # Save to output directory (created in current working directory)
+    output_dir = get_output_dir()
+    output_dir.mkdir(parents=True, exist_ok=True)
     
-    filename = os.path.join(output_dir, f"optimal_viewing_times_{datetime.now(pytz.UTC).strftime('%Y%m%d_%H%M')}.csv")
-    results.to_csv(filename, index=False)
+    filename = output_dir / f"optimal_viewing_times_{datetime.now(pytz.UTC).strftime('%Y%m%d_%H%M')}.csv"
+    results.to_csv(str(filename), index=False)
     
     print("\n" + "=" * 60)
     print("COMPLETE!")
