@@ -4,11 +4,25 @@ Simple NGC Catalog Loader for StarTeller-CLI
 Handles automatic download and loading of OpenNGC catalog data.
 """
 
-import pandas as pd
-import numpy as np
 import os
-import urllib.request
+import sys
 import urllib.error
+import urllib.request
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+
+def get_user_data_dir():
+    """Get platform-specific user data directory for StarTeller-CLI."""
+    if sys.platform == 'win32':
+        base = os.environ.get('LOCALAPPDATA', os.path.expanduser('~'))
+        return Path(base) / 'StarTeller-CLI'
+    elif sys.platform == 'darwin':
+        return Path.home() / 'Library' / 'Application Support' / 'StarTeller-CLI'
+    else:
+        return Path.home() / '.local' / 'share' / 'starteller-cli'
 
 def download_ngc_catalog(ngc_path):
     """
@@ -26,15 +40,16 @@ def download_ngc_catalog(ngc_path):
         print("📥 NGC.csv not found - downloading from OpenNGC repository...")
         print(f"   Downloading from: {url}")
         
-        # Ensure the data directory exists
-        os.makedirs(os.path.dirname(ngc_path), exist_ok=True)
+        # Ensure the directory exists
+        ngc_file = Path(ngc_path)
+        ngc_file.parent.mkdir(parents=True, exist_ok=True)
         
         # Download the file
-        urllib.request.urlretrieve(url, ngc_path)
+        urllib.request.urlretrieve(url, str(ngc_path))
         
         # Verify the file was downloaded and has content
-        if os.path.exists(ngc_path) and os.path.getsize(ngc_path) > 1000:  # At least 1KB
-            print(f"✅ Successfully downloaded NGC.csv ({os.path.getsize(ngc_path)/1024:.0f} KB)")
+        if ngc_file.exists() and ngc_file.stat().st_size > 1000:  # At least 1KB
+            print(f"✅ Successfully downloaded NGC.csv ({ngc_file.stat().st_size/1024:.0f} KB)")
             return True
         else:
             print("❌ Download failed - file is empty or corrupted")
@@ -64,12 +79,14 @@ def load_ngc_catalog(catalog_filter="all"):
         "all": "All NGC/IC"
     }
     try:
-        # Check for the OpenNGC catalog file (in data/ folder)
-        ngc_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'NGC.csv')
+        # Check for the OpenNGC catalog file in user data directory
+        user_data_dir = get_user_data_dir()
+        user_data_dir.mkdir(parents=True, exist_ok=True)
+        ngc_path = user_data_dir / 'NGC.csv'
         
         # If file doesn't exist, try to download it automatically
-        if not os.path.exists(ngc_path):
-            if not download_ngc_catalog(ngc_path):
+        if not ngc_path.exists():
+            if not download_ngc_catalog(str(ngc_path)):
                 # Download failed - provide manual instructions
                 print("\n" + "=" * 60)
                 print("MANUAL DOWNLOAD REQUIRED")
@@ -77,13 +94,13 @@ def load_ngc_catalog(catalog_filter="all"):
                 print("❌ Automatic download failed. Please download manually:")
                 print("   1. Go to: https://github.com/mattiaverga/OpenNGC/blob/master/database_files/NGC.csv")
                 print("   2. Click 'Raw' button to download the file")
-                print("   3. Save it as 'NGC.csv' in the data/ folder")
+                print("   3. Save it as 'NGC.csv' in the user data directory")
                 print(f"   4. Full path should be: {ngc_path}")
                 print("=" * 60)
                 return pd.DataFrame()
         
         # Load and filter catalog quietly
-        df = pd.read_csv(ngc_path, sep=';', low_memory=False)
+        df = pd.read_csv(str(ngc_path), sep=';', low_memory=False)
         
         # Filter for NGC and IC objects with coordinates
         df = df[df['Name'].str.match(r'^(NGC|IC)\d+$', na=False)]

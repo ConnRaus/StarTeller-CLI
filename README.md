@@ -2,198 +2,115 @@
 
 A comprehensive command-line tool for astrophotographers and telescope enthusiasts to find optimal viewing times for deep sky objects throughout the year.
 
-StarTeller-CLI calculates the absolute best viewing times for celestial objects, taking into account altitude, azimuth, dark sky conditions, and seasonal visibility to help you plan perfect observation sessions.
+Given your location, StarTeller calculates when each object in the NGC/IC/Messier catalogs reaches its highest point during astronomical darkness. It accounts for altitude, direction, and dark sky conditions to help you plan observation sessions.
 
-## Features
+## Installation
 
-- **Automatic Data Management**: Downloads and caches astronomical catalogs automatically
-- **Comprehensive Catalogs**: Access to 13,000+ deep sky objects (NGC, IC, Messier)
-- **Optimal Timing**: Finds the best viewing times considering dark sky conditions and object altitude
-- **Location Memory**: Saves manually entered coordinates for future runs
-- **Direction Filtering**: Filter objects by viewing direction (North, South, East, West)
-- **Performance Optimized**: Multiprocessing support and intelligent caching
-- **Export Ready**: Detailed CSV output with all viewing information
-- **Custom Object Lists**: Target specific objects of interest
-
-## Quick Start
-
-### 1. Clone and Setup
+### Install as a package
 
 ```bash
 git clone https://github.com/ConnRaus/StarTeller-CLI.git
 cd StarTeller-CLI
-
-# Create virtual environment (recommended)
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
+venv\Scripts\activate  # On Linux/Mac: source venv/bin/activate
+pip install .
+starteller
 ```
 
-### 2. Run StarTeller-CLI
+### Or run directly
 
 ```bash
+git clone https://github.com/ConnRaus/StarTeller-CLI.git
+cd StarTeller-CLI
+pip install -r requirements.txt
 python src/starteller_cli.py
 ```
 
-The program will:
+## How it works
 
-- Automatically download the NGC catalog if needed
-- Prompt for your coordinates (or use previously saved location)
-- Guide you through catalog and viewing preferences
-- Generate a comprehensive CSV with optimal viewing times
+1. Enter your coordinates (or use a saved location)
+2. Pick a catalog (Messier, NGC, IC, or all ~13,000 objects)
+3. Set minimum altitude and optional direction filter
+4. Get a CSV with optimal viewing times for each object
 
-### 3. Output
+The first run downloads the NGC catalog (~2MB) and calculates night darkness times for the year. Both are cached, so subsequent runs are fast.
 
-Results are saved as CSV files in the `output/` directory with columns including:
+## Output
 
-- **Object**: NGC/IC/Messier designation
-- **Name**: Common name (e.g., "Andromeda Galaxy")
-- **Type**: Object type (Galaxy, Nebula, etc.)
-- **Best_Date**: Optimal viewing date
-- **Best_Time_Local**: Best viewing time in your timezone
-- **Max_Altitude_deg**: Maximum altitude reached
-- **Azimuth_deg**: Viewing direction
-- **Direction**: Cardinal direction (N, NE, E, etc.)
+Results go to `starteller_output/` in your current directory. The CSV includes:
 
-## Usage Options
+| Column | Description |
+|--------|-------------|
+| Object | NGC/IC/Messier ID |
+| Name | Common name if available |
+| Type | Galaxy, Nebula, Cluster, etc. |
+| Best_Date | Date when object is highest at midnight |
+| Best_Time_Local | Time of peak altitude |
+| Max_Altitude_deg | Maximum altitude reached |
+| Azimuth_deg | Azimuth angle at peak altitude |
+| Direction | Cardinal direction (N, NE, E, etc.) |
+| Rise_Time_Local | When it rises above your minimum altitude |
+| Rise_Direction | Direction it rises from |
+| Set_Time_Local | When it drops below minimum altitude |
+| Set_Direction | Direction it sets toward |
+| Observing_Duration_Hours | Total time above minimum altitude |
+| Dark_Nights_Per_Year | Number of nights with astronomical darkness |
+| Good_Viewing_Periods | Number of good viewing periods |
+| Dark_Start_Local | Start of astronomical darkness |
+| Dark_End_Local | End of astronomical darkness |
+| Timezone | Timezone used for local times |
 
-### Catalog Selection
+## Options
 
-- **Messier Objects** (~110 famous deep sky objects)
-- **NGC Objects** (~8,000 New General Catalog objects)
-- **IC Objects** (~5,000 Index Catalog objects)
-- **All Objects** (~13,000 combined NGC + IC objects)
-- **Custom Objects** (specify your own list)
+**Catalogs:**
+- Messier (~110 objects)
+- NGC (~8,000 objects)
+- IC (~5,000 objects)
+- All (~13,000 objects)
 
-### Viewing Preferences
+**Filters:**
+- Minimum altitude (default 20°)
+- Direction filter - e.g., `90,180` for objects in the East to South
 
-- **Minimum Altitude**: Set minimum viewing angle (default: 20°)
-- **Direction Filter**: Target specific sky regions (e.g., East-South)
-- **Location**: Manual coordinate input (saved for future runs)
-
-### Example Custom Objects
-
-```
-M31,NGC224,IC342,M42,NGC2024
-```
-
-## Advanced Usage
-
-### Location Management
-
-The program prompts for your coordinates on first run and saves them to a local file for future runs. To set coordinates programmatically:
+## Python API
 
 ```python
 from src.starteller_cli import StarTellerCLI
 
-# Create instance with specific coordinates
-st = StarTellerCLI(latitude=40.7589, longitude=-73.9851, elevation=50)
-results = st.find_optimal_viewing_times(min_altitude=30)
+st = StarTellerCLI(
+    latitude=40.7, 
+    longitude=-74.0, 
+    elevation=10,
+    catalog_filter='messier'
+)
+
+results = st.find_optimal_viewing_times(min_altitude=25)
+results = st.find_optimal_viewing_times(direction_filter=(90, 180))  # East to South
 ```
 
-### Direction Filtering
+## File locations
 
-Filter objects by viewing direction using azimuth ranges:
+Data is stored in platform-specific directories:
 
-```python
-# North: 315° to 45°
-results = st.find_optimal_viewing_times(direction_filter=(315, 45))
+**Windows:** `%LOCALAPPDATA%\StarTeller-CLI\`  
+**Linux:** `~/.local/share/starteller-cli/`  
+**macOS:** `~/Library/Application Support/StarTeller-CLI/`
 
-# East to South: 90° to 180°
-results = st.find_optimal_viewing_times(direction_filter=(90, 180))
-```
-
-### Cache Management
-
-StarTeller-CLI uses intelligent caching for performance:
-
-- Astronomical calculations are cached by location and year
-- Catalog data is cached locally after first download
-- Cache automatically invalidates when location changes
+Cache goes to the platform's cache directory. Output CSVs go to `./starteller_output/`.
 
 ## Requirements
 
 - Python 3.8+
-- Internet connection (for initial catalog download)
-- ~50MB disk space for catalog data and cache
+- Internet connection (first run only, to download catalog)
 
-### Dependencies
+Dependencies: pandas, numpy, pytz, timezonefinder, tqdm
 
-- **skyfield**: Astronomical calculations
-- **pandas**: Data processing and CSV output
-- **numpy**: Numerical computations
-- **pytz**: Timezone handling
-- **timezonefinder**: Automatic timezone detection
-- **tqdm**: Progress bars
+## Data source
 
-## Data Sources and Credits
-
-### OpenNGC Catalog
-
-This project uses the comprehensive OpenNGC catalog maintained by **Mattia Verga**:
-
-- **Source**: https://github.com/mattiaverga/OpenNGC
-- **License**: CC-BY-SA-4.0
-- **Usage**: The OpenNGC catalog is used under the Creative Commons Attribution-ShareAlike 4.0 International License
-
-The OpenNGC catalog provides:
-
-- 13,000+ deep sky objects from NGC and IC catalogs
-- Accurate coordinates and physical data
-- Common names familiar to amateur astronomers
-- Maintained specifically for the astronomy community
-
-### Additional Credits
-
-- **Skyfield**: Astronomical calculations by Brandon Rhodes
-- **Pandas**: Data manipulation library
-- **NASA JPL**: Ephemeris data for astronomical calculations
+Catalog data comes from [OpenNGC](https://github.com/mattiaverga/OpenNGC) by Mattia Verga, licensed under CC-BY-SA-4.0.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT. See [LICENSE](LICENSE).
 
-The NGC catalog data is licensed under CC-BY-SA-4.0 by the OpenNGC project.
-
-## Performance Notes
-
-- **Initial Run**: May take 2-3 minutes while downloading and processing catalogs
-- **Subsequent Runs**: Typically complete in 10-30 seconds thanks to caching
-- **Memory Usage**: ~100-200MB during calculation
-- **Multiprocessing**: Automatically uses all available CPU cores for calculations
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Network Error**: If catalog download fails, check internet connection
-2. **Location Input**: Enter your coordinates when prompted (latitude, longitude, elevation)
-3. **Cache Issues**: Delete cache files in `user_data/` to force regeneration
-4. **Memory Issues**: Reduce catalog size by using filters (Messier vs All)
-
-### Testing
-
-Run the comprehensive test suite:
-
-```bash
-python tests/test_starteller_cli.py --comprehensive
-```
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit pull requests or open issues for:
-
-- New features
-- Bug fixes
-- Performance improvements
-- Documentation updates
-
-## Acknowledgments
-
-Special thanks to the OpenNGC project for providing the comprehensive catalog data that makes StarTeller-CLI possible. The OpenNGC project represents years of effort to create a clean, accurate, and amateur-friendly deep sky object database.
-
----
-
-**Perfect for**: Astrophotographers planning imaging sessions, visual observers with telescopes, astronomy enthusiasts learning the night sky, and anyone wanting to optimize their stargazing experience.
+The NGC catalog data is CC-BY-SA-4.0.

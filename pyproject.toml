@@ -25,7 +25,6 @@ classifiers = [
 ]
 requires-python = ">=3.8"
 dependencies = [
-    "skyfield>=1.46",
     "pandas>=1.5.0",
     "numpy>=1.21.0",
     "pytz>=2022.1",

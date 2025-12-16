@@ -10,6 +10,7 @@ import tempfile
 import shutil
 import unittest
 from unittest.mock import patch, MagicMock
+from pathlib import Path
 import pandas as pd
 import pickle
 from datetime import datetime, date
@@ -156,7 +157,7 @@ class TestStarTellerCLICaching(unittest.TestCase):
         def mock_get_cache_filepath(year=None):
             if year is None:
                 year = datetime.now().year
-            return os.path.join(self.test_cache_dir, f"night_midpoints_test_{year}.pkl")
+            return Path(self.test_cache_dir) / f"night_midpoints_test_{year}.pkl"
         
         self.st._get_cache_filepath = mock_get_cache_filepath
     
@@ -191,8 +192,8 @@ class TestStarTellerCLICaching(unittest.TestCase):
             'created_date': datetime.now().isoformat()
         }
         
-        os.makedirs(os.path.dirname(cache_file), exist_ok=True)
-        with open(cache_file, 'wb') as f:
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(str(cache_file), 'wb') as f:
             pickle.dump(cache_data, f)
         
         # Test loading
@@ -214,8 +215,8 @@ class TestStarTellerCLICaching(unittest.TestCase):
             'created_date': datetime.now().isoformat()
         }
         
-        os.makedirs(os.path.dirname(cache_file), exist_ok=True)
-        with open(cache_file, 'wb') as f:
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(str(cache_file), 'wb') as f:
             pickle.dump(cache_data, f)
         
         # Should return None due to location mismatch
@@ -237,7 +238,7 @@ class TestStarTellerCLIFunctionality(unittest.TestCase):
         def mock_get_cache_filepath(year=None):
             if year is None:
                 year = datetime.now().year
-            return os.path.join(self.test_cache_dir, f"night_midpoints_test_{year}.pkl")
+            return Path(self.test_cache_dir) / f"night_midpoints_test_{year}.pkl"
         
         self.st._get_cache_filepath = mock_get_cache_filepath
     
@@ -264,7 +265,7 @@ class TestStarTellerCLIFunctionality(unittest.TestCase):
         def mock_get_cache_filepath_st2(year=None):
             if year is None:
                 year = datetime.now().year
-            return os.path.join(self.test_cache_dir, f"night_midpoints_test2_{year}.pkl")
+            return Path(self.test_cache_dir) / f"night_midpoints_test2_{year}.pkl"
         st2._get_cache_filepath = mock_get_cache_filepath_st2
         
         hash2 = st2._generate_location_hash()
@@ -277,7 +278,7 @@ class TestStarTellerCLIFunctionality(unittest.TestCase):
         def mock_get_cache_filepath_st3(year=None):
             if year is None:
                 year = datetime.now().year
-            return os.path.join(self.test_cache_dir, f"night_midpoints_test3_{year}.pkl")
+            return Path(self.test_cache_dir) / f"night_midpoints_test3_{year}.pkl"
         st3._get_cache_filepath = mock_get_cache_filepath_st3
         
         hash3 = st3._generate_location_hash()
@@ -346,7 +347,7 @@ class TestStarTellerCLICustomObjects(unittest.TestCase):
         def mock_get_cache_filepath(year=None):
             if year is None:
                 year = datetime.now().year
-            return os.path.join(self.test_cache_dir, f"night_midpoints_test_{year}.pkl")
+            return Path(self.test_cache_dir) / f"night_midpoints_test_{year}.pkl"
         
         st._get_cache_filepath = mock_get_cache_filepath
         return original_get_cache_filepath
@@ -371,7 +372,7 @@ class TestStarTellerCLIErrorHandling(unittest.TestCase):
         def mock_get_cache_filepath(year=None):
             if year is None:
                 year = datetime.now().year
-            return os.path.join(self.test_cache_dir, f"night_midpoints_test_{year}.pkl")
+            return Path(self.test_cache_dir) / f"night_midpoints_test_{year}.pkl"
         
         st._get_cache_filepath = mock_get_cache_filepath
         return original_get_cache_filepath
@@ -410,9 +411,9 @@ class TestStarTellerCLIErrorHandling(unittest.TestCase):
         
         # Create a corrupted cache file
         cache_file = st._get_cache_filepath(2025)
-        os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
         
-        with open(cache_file, 'w') as f:
+        with open(str(cache_file), 'w') as f:
             f.write("This is not valid pickle data")
         
         # Should handle corruption gracefully and return None
@@ -485,7 +486,7 @@ def quick_integration_test():
         def mock_get_cache_filepath(year=None):
             if year is None:
                 year = datetime.now().year
-            return os.path.join(test_cache_dir, f"night_midpoints_quick_test_{year}.pkl")
+            return Path(test_cache_dir) / f"night_midpoints_quick_test_{year}.pkl"
         
         st._get_cache_filepath = mock_get_cache_filepath
         
