@@ -5,6 +5,7 @@ A command-line tool to find the best times to observe deep sky objects throughou
 """
 
 import pandas as pd
+import numpy as np
 import os
 import pickle
 import hashlib
@@ -17,57 +18,192 @@ try:
 except ImportError:
     from catalog_manager import load_ngc_catalog
 from tqdm import tqdm
+from multiprocessing import Pool, cpu_count
 import warnings
-from concurrent.futures import ProcessPoolExecutor, as_completed
-import multiprocessing
 warnings.filterwarnings('ignore')
 
-# Global worker function for multiprocessing
-def process_batch_worker(batch_data):
-    """
-    Worker function for multiprocessing batch processing.
+# Get optimal process count
+NUM_WORKERS = cpu_count() or 8
+
+# Global variables for worker processes (initialized once per worker)
+_worker_ts = None
+_worker_observer = None
+_worker_eph = None
+_worker_t_array = None
+_worker_night_dates = None
+_worker_night_midpoint_locals = None
+_worker_night_dark_starts = None
+_worker_night_dark_ends = None
+_worker_local_tz = None
+_worker_local_tz_str = None
+
+def _init_worker(latitude, longitude, elevation, eph_path, t_array_data, 
+                 night_dates_iso, night_midpoint_isos, night_dark_start_isos, 
+                 night_dark_end_isos, local_tz_str):
+    """Initialize worker process with ALL shared data (called once per worker)."""
+    global _worker_ts, _worker_observer, _worker_eph, _worker_t_array
+    global _worker_night_dates, _worker_night_midpoint_locals
+    global _worker_night_dark_starts, _worker_night_dark_ends
+    global _worker_local_tz, _worker_local_tz_str
     
-    Args:
-        batch_data: Tuple of (batch, min_altitude, direction_filter, night_midpoints, observer_data)
+    from skyfield.api import load, wgs84
+    from datetime import date
     
-    Returns:
-        List of optimal viewing info dictionaries
-    """
-    batch, min_altitude, direction_filter, night_midpoints, observer_data = batch_data
+    # Initialize Skyfield objects
+    _worker_ts = load.timescale()
+    if os.path.exists(eph_path):
+        _worker_eph = load(eph_path)
+    else:
+        _worker_eph = load('de421.bsp')
     
-    # Recreate necessary objects in this process
-    from skyfield.api import Star, load, wgs84
-    import pytz
+    earth = _worker_eph['earth']
+    _worker_observer = earth + wgs84.latlon(latitude, longitude, elevation_m=elevation)
     
-    # Unpack observer data
-    latitude, longitude, elevation, local_tz_str = observer_data
+    # Initialize timezone
+    _worker_local_tz_str = local_tz_str
+    _worker_local_tz = pytz.timezone(local_tz_str)
     
-    # Create Skyfield objects for this process
-    ts = load.timescale()
+    # Pre-compute time array ONCE per worker (not per object!)
+    midpoint_times_utc = [datetime.fromtimestamp(ts, tz=pytz.UTC) for ts in t_array_data]
+    _worker_t_array = _worker_ts.from_datetimes(midpoint_times_utc)
+    
+    # Pre-parse all night data ONCE per worker
+    _worker_night_dates = [date.fromisoformat(s) for s in night_dates_iso]
+    _worker_night_midpoint_locals = [datetime.fromisoformat(s) for s in night_midpoint_isos]
+    _worker_night_dark_starts = [datetime.fromisoformat(s) for s in night_dark_start_isos]
+    _worker_night_dark_ends = [datetime.fromisoformat(s) for s in night_dark_end_isos]
+
+def _process_object_worker(args):
+    """Worker function to process a single object (runs in subprocess)."""
+    global _worker_ts, _worker_observer, _worker_t_array
+    global _worker_night_dates, _worker_night_midpoint_locals
+    global _worker_night_dark_starts, _worker_night_dark_ends
+    global _worker_local_tz, _worker_local_tz_str
+    
+    # Only receive minimal object data - night data is already in worker globals!
+    obj_id, ra, dec, name, obj_type, min_altitude, direction_filter = args
+    
+    from skyfield.api import Star
+    import numpy as np
+    
     try:
-        # Set up data directory and ephemeris file path
-        import os
-        data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
-        os.makedirs(data_dir, exist_ok=True)  # Ensure data directory exists
-        eph_path = os.path.join(data_dir, 'de421.bsp')
+        # Create Star object
+        star = Star(ra_hours=ra/15.0, dec_degrees=dec)
         
-        if os.path.exists(eph_path):
-            eph = load(eph_path)
+        # VECTORIZED: Calculate alt/az for ALL nights at once
+        # Uses pre-computed _worker_t_array
+        astrometric = _worker_observer.at(_worker_t_array).observe(star)
+        alt, az, _ = astrometric.apparent().altaz()
+        
+        alt_degrees = alt.degrees
+        az_degrees = az.degrees
+        
+        # Apply filters
+        above_altitude = alt_degrees >= min_altitude
+        
+        if direction_filter:
+            min_az, max_az = direction_filter
+            if min_az <= max_az:
+                meets_direction = (az_degrees >= min_az) & (az_degrees <= max_az)
+            else:
+                meets_direction = (az_degrees >= min_az) | (az_degrees <= max_az)
+            valid_mask = above_altitude & meets_direction
         else:
-            # Download ephemeris to data folder
-            from skyfield.iokit import Loader
-            loader = Loader(data_dir)
-            eph = loader('de421.bsp')
-    except:
-        # Fallback if there are any issues
-        eph = load('de421.bsp')
-    
-    earth = eph['earth']
-    observer = earth + wgs84.latlon(latitude, longitude, elevation_m=elevation)
-    
-    
-    def _azimuth_to_cardinal_local(azimuth):
-        """Local version of azimuth to cardinal conversion."""
+            valid_mask = above_altitude
+        
+        total_good_nights = int(np.sum(valid_mask))
+        
+        if total_good_nights == 0:
+            return (obj_id, name, obj_type, 'N/A', 'N/A', 'Never visible', 'N/A', 
+                    'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 0, 0, 0, 'N/A', 'N/A')
+        
+        # Find best night
+        masked_altitudes = np.where(valid_mask, alt_degrees, -999)
+        best_idx = int(np.argmax(masked_altitudes))
+        
+        best_altitude = round(float(alt_degrees[best_idx]), 1)
+        best_azimuth = round(float(az_degrees[best_idx]), 1)
+        best_date = _worker_night_dates[best_idx]
+        best_midpoint = _worker_night_midpoint_locals[best_idx]
+        best_dark_start = _worker_night_dark_starts[best_idx]
+        best_dark_end = _worker_night_dark_ends[best_idx]
+        
+        # Calculate rise/set times with simplified approach
+        start_utc = best_dark_start.astimezone(pytz.UTC)
+        end_utc = best_dark_end.astimezone(pytz.UTC)
+        
+        t_endpoints = _worker_ts.from_datetimes([start_utc, end_utc])
+        endpoint_astrometric = _worker_observer.at(t_endpoints).observe(star)
+        endpoint_alt, endpoint_az, _ = endpoint_astrometric.apparent().altaz()
+        
+        start_alt, end_alt = endpoint_alt.degrees[0], endpoint_alt.degrees[1]
+        start_az, end_az = endpoint_az.degrees[0], endpoint_az.degrees[1]
+        
+        def meets_dir(az):
+            if direction_filter is None:
+                return True
+            min_az, max_az = direction_filter
+            if min_az <= max_az:
+                return min_az <= az <= max_az
+            return az >= min_az or az <= max_az
+        
+        start_visible = (start_alt >= min_altitude and meets_dir(start_az))
+        end_visible = (end_alt >= min_altitude and meets_dir(end_az))
+        
+        # Simplified rise/set
+        if start_visible and end_visible:
+            rise_time = best_dark_start.strftime('%H:%M')
+            set_time = best_dark_end.strftime('%H:%M')
+            rise_dir = _azimuth_to_cardinal(start_az)
+            set_dir = _azimuth_to_cardinal(end_az)
+            duration = round((best_dark_end - best_dark_start).total_seconds() / 3600, 1)
+        elif start_visible:
+            rise_time = best_dark_start.strftime('%H:%M')
+            set_time = '~' + best_dark_end.strftime('%H:%M')
+            rise_dir = _azimuth_to_cardinal(start_az)
+            set_dir = _azimuth_to_cardinal(end_az)
+            duration = round((best_dark_end - best_dark_start).total_seconds() / 3600 * 0.5, 1)
+        elif end_visible:
+            rise_time = '~' + best_dark_start.strftime('%H:%M')
+            set_time = best_dark_end.strftime('%H:%M')
+            rise_dir = _azimuth_to_cardinal(start_az)
+            set_dir = _azimuth_to_cardinal(end_az)
+            duration = round((best_dark_end - best_dark_start).total_seconds() / 3600 * 0.5, 1)
+        else:
+            rise_time = 'N/A'
+            set_time = 'N/A'
+            rise_dir = 'N/A'
+            set_dir = 'N/A'
+            duration = 0
+        
+        # Return as tuple (much faster to serialize than dict!)
+        return (obj_id, name, obj_type, best_date, best_midpoint.strftime('%H:%M'),
+                best_altitude, best_azimuth, _azimuth_to_cardinal(best_azimuth),
+                rise_time, rise_dir, set_time, set_dir, duration,
+                total_good_nights, total_good_nights,
+                best_dark_start.strftime('%H:%M'), best_dark_end.strftime('%H:%M'))
+        
+    except Exception as e:
+        return (obj_id, name, obj_type, 'N/A', 'N/A', 'Error', 'N/A', 
+                'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 0, 0, 0, 'N/A', 'N/A')
+
+# Vectorized helper functions for fast computation
+def _azimuth_to_cardinal(azimuth):
+    """Convert azimuth angle to cardinal direction."""
+    if isinstance(azimuth, np.ndarray):
+        # Vectorized version for numpy arrays
+        result = np.empty(azimuth.shape, dtype='U2')
+        result[:] = 'N'
+        result[(azimuth >= 22.5) & (azimuth < 67.5)] = 'NE'
+        result[(azimuth >= 67.5) & (azimuth < 112.5)] = 'E'
+        result[(azimuth >= 112.5) & (azimuth < 157.5)] = 'SE'
+        result[(azimuth >= 157.5) & (azimuth < 202.5)] = 'S'
+        result[(azimuth >= 202.5) & (azimuth < 247.5)] = 'SW'
+        result[(azimuth >= 247.5) & (azimuth < 292.5)] = 'W'
+        result[(azimuth >= 292.5) & (azimuth < 337.5)] = 'NW'
+        return result
+    else:
+        # Scalar version
         directions = [
             (0, 22.5, "N"), (22.5, 67.5, "NE"), (67.5, 112.5, "E"), (112.5, 157.5, "SE"),
             (157.5, 202.5, "S"), (202.5, 247.5, "SW"), (247.5, 292.5, "W"), (292.5, 337.5, "NW"),
@@ -77,267 +213,6 @@ def process_batch_worker(batch_data):
             if min_az <= azimuth < max_az:
                 return direction
         return "N"
-    
-    def _find_rise_set_times_local(star, dark_start, dark_end, min_altitude, direction_filter):
-        """Local version of rise/set time calculation."""
-        try:
-            def meets_direction_filter(az):
-                if direction_filter is None:
-                    return True
-                min_az, max_az = direction_filter
-                if min_az <= max_az:
-                    return min_az <= az <= max_az
-                else:
-                    return az >= min_az or az <= max_az
-            
-            def binary_search_transition(start_time, end_time, target_state):
-                left = start_time
-                right = end_time
-                
-                while (right - left).total_seconds() > 60:
-                    mid = left + (right - left) / 2
-                    mid_utc = mid.astimezone(pytz.UTC)
-                    
-                    t = ts.from_datetime(mid_utc)
-                    astrometric = observer.at(t).observe(star)
-                    alt, az, distance = astrometric.apparent().altaz()
-                    
-                    current_state = (alt.degrees >= min_altitude and meets_direction_filter(az.degrees))
-                    
-                    if current_state == target_state:
-                        right = mid
-                    else:
-                        left = mid
-                
-                return right
-            
-            # Check if object is visible at start and end of dark period
-            start_utc = dark_start.astimezone(pytz.UTC)
-            end_utc = dark_end.astimezone(pytz.UTC)
-            
-            t_start = ts.from_datetime(start_utc)
-            t_end = ts.from_datetime(end_utc)
-            
-            start_astrometric = observer.at(t_start).observe(star)
-            end_astrometric = observer.at(t_end).observe(star)
-            
-            start_alt, start_az, _ = start_astrometric.apparent().altaz()
-            end_alt, end_az, _ = end_astrometric.apparent().altaz()
-            
-            start_visible = (start_alt.degrees >= min_altitude and meets_direction_filter(start_az.degrees))
-            end_visible = (end_alt.degrees >= min_altitude and meets_direction_filter(end_az.degrees))
-            
-            if start_visible and end_visible:
-                # Visible entire dark period
-                rise_time = dark_start.time().strftime('%H:%M')
-                rise_direction = _azimuth_to_cardinal_local(start_az.degrees)
-                set_time = dark_end.time().strftime('%H:%M')
-                set_direction = _azimuth_to_cardinal_local(end_az.degrees)
-                duration = (dark_end - dark_start).total_seconds() / 3600
-                
-            elif start_visible and not end_visible:
-                # Visible at start, sets during dark period
-                set_time_dt = binary_search_transition(dark_start, dark_end, False)
-                rise_time = dark_start.time().strftime('%H:%M')
-                rise_direction = _azimuth_to_cardinal_local(start_az.degrees)
-                set_time = set_time_dt.time().strftime('%H:%M')
-                
-                set_utc = set_time_dt.astimezone(pytz.UTC)
-                t_set = ts.from_datetime(set_utc)
-                set_astrometric = observer.at(t_set).observe(star)
-                _, set_az_calc, _ = set_astrometric.apparent().altaz()
-                set_direction = _azimuth_to_cardinal_local(set_az_calc.degrees)
-                
-                duration = (set_time_dt - dark_start).total_seconds() / 3600
-                
-            elif not start_visible and end_visible:
-                # Rises during dark period, visible at end
-                rise_time_dt = binary_search_transition(dark_start, dark_end, True)
-                rise_time = rise_time_dt.time().strftime('%H:%M')
-                
-                rise_utc = rise_time_dt.astimezone(pytz.UTC)
-                t_rise = ts.from_datetime(rise_utc)
-                rise_astrometric = observer.at(t_rise).observe(star)
-                _, rise_az_calc, _ = rise_astrometric.apparent().altaz()
-                rise_direction = _azimuth_to_cardinal_local(rise_az_calc.degrees)
-                
-                set_time = dark_end.time().strftime('%H:%M')
-                set_direction = _azimuth_to_cardinal_local(end_az.degrees)
-                duration = (dark_end - rise_time_dt).total_seconds() / 3600
-                
-            else:
-                # Check if it rises and sets within the dark period
-                rise_time_dt = binary_search_transition(dark_start, dark_end, True)
-                
-                if rise_time_dt < dark_end:
-                    set_time_dt = binary_search_transition(rise_time_dt, dark_end, False)
-                    
-                    if set_time_dt > rise_time_dt:
-                        rise_time = rise_time_dt.time().strftime('%H:%M')
-                        set_time = set_time_dt.time().strftime('%H:%M')
-                        
-                        rise_utc = rise_time_dt.astimezone(pytz.UTC)
-                        set_utc = set_time_dt.astimezone(pytz.UTC)
-                        
-                        t_rise = ts.from_datetime(rise_utc)
-                        t_set = ts.from_datetime(set_utc)
-                        
-                        rise_astrometric = observer.at(t_rise).observe(star)
-                        set_astrometric = observer.at(t_set).observe(star)
-                        
-                        _, rise_az_calc, _ = rise_astrometric.apparent().altaz()
-                        _, set_az_calc, _ = set_astrometric.apparent().altaz()
-                        
-                        rise_direction = _azimuth_to_cardinal_local(rise_az_calc.degrees)
-                        set_direction = _azimuth_to_cardinal_local(set_az_calc.degrees)
-                        duration = (set_time_dt - rise_time_dt).total_seconds() / 3600
-                    else:
-                        return {
-                            'rise_time': 'N/A', 'rise_direction': 'N/A',
-                            'set_time': 'N/A', 'set_direction': 'N/A',
-                            'duration_hours': 0
-                        }
-                else:
-                    return {
-                        'rise_time': 'N/A', 'rise_direction': 'N/A',
-                        'set_time': 'N/A', 'set_direction': 'N/A',
-                        'duration_hours': 0
-                    }
-            
-            return {
-                'rise_time': rise_time,
-                'rise_direction': rise_direction,
-                'set_time': set_time,
-                'set_direction': set_direction,
-                'duration_hours': round(duration, 1)
-            }
-            
-        except Exception as e:
-            return {
-                'rise_time': 'N/A', 'rise_direction': 'N/A',
-                'set_time': 'N/A', 'set_direction': 'N/A',
-                'duration_hours': 0
-            }
-    
-    # Process the batch
-    batch_results = []
-    
-    for obj_id, obj_data in batch:
-        try:
-            star = Star(ra_hours=obj_data['ra']/15.0, dec_degrees=obj_data['dec'])
-            
-            # Find optimal night efficiently
-            best_altitude = -90
-            best_date = None
-            best_midpoint = None
-            best_azimuth = 0
-            total_good_nights = 0
-            best_dark_start = None
-            best_dark_end = None
-            
-            # Collect all midpoint times for vectorized processing
-            midpoint_times_utc = []
-            midpoint_data = []
-            
-            for check_date, midpoint_local, dark_start, dark_end in night_midpoints:
-                midpoint_utc = midpoint_local.astimezone(pytz.UTC)
-                midpoint_times_utc.append(midpoint_utc)
-                midpoint_data.append((check_date, midpoint_local, dark_start, dark_end))
-            
-            # Vectorized altitude calculation for all midpoints at once
-            if midpoint_times_utc:
-                t_array = ts.from_datetimes(midpoint_times_utc)
-                astrometric = observer.at(t_array).observe(star)
-                alt, az, distance = astrometric.apparent().altaz()
-                
-                # Process results for each night
-                for j, (alt_deg, az_deg) in enumerate(zip(alt.degrees, az.degrees)):
-                    check_date, midpoint_local, dark_start, dark_end = midpoint_data[j]
-                    
-                    # Check if it meets criteria at this midpoint
-                    above_altitude = alt_deg >= min_altitude
-                    meets_direction = True
-                    
-                    if direction_filter:
-                        min_az, max_az = direction_filter
-                        if min_az <= max_az:
-                            meets_direction = (min_az <= az_deg <= max_az)
-                        else:
-                            meets_direction = (az_deg >= min_az or az_deg <= max_az)
-                    
-                    if above_altitude and meets_direction:
-                        total_good_nights += 1
-                        
-                        # Track the night where it's highest at midpoint
-                        if alt_deg > best_altitude:
-                            best_altitude = alt_deg
-                            best_date = check_date
-                            best_midpoint = midpoint_local
-                            best_azimuth = az_deg
-                            best_dark_start = dark_start
-                            best_dark_end = dark_end
-            
-            # Generate result for this object
-            if best_date is None:
-                optimal_info = {
-                    'best_date': None,
-                    'best_time_local': 'N/A',
-                    'max_altitude': 'Never visible',
-                    'max_azimuth': 'N/A',
-                    'direction': 'N/A',
-                    'dark_start_local': 'N/A',
-                    'dark_end_local': 'N/A',
-                    'rise_time': 'N/A',
-                    'rise_direction': 'N/A',
-                    'set_time': 'N/A',
-                    'set_direction': 'N/A',
-                    'duration_hours': 0,
-                    'dark_nights_per_year': 0,
-                    'good_viewing_periods': 0
-                }
-            else:
-                # Find precise rise/set times for the optimal night
-                rise_set_info = _find_rise_set_times_local(star, best_dark_start, best_dark_end, 
-                                                        min_altitude, direction_filter)
-                
-                optimal_info = {
-                    'best_date': best_date,
-                    'best_time_local': best_midpoint.time().strftime('%H:%M'),
-                    'max_altitude': round(best_altitude, 1),
-                    'max_azimuth': round(best_azimuth, 1),
-                    'direction': _azimuth_to_cardinal_local(best_azimuth),
-                    'dark_start_local': best_dark_start.time().strftime('%H:%M'),
-                    'dark_end_local': best_dark_end.time().strftime('%H:%M'),
-                    'rise_time': rise_set_info['rise_time'],
-                    'rise_direction': rise_set_info['rise_direction'],
-                    'set_time': rise_set_info['set_time'],
-                    'set_direction': rise_set_info['set_direction'],
-                    'duration_hours': rise_set_info['duration_hours'],
-                    'dark_nights_per_year': total_good_nights,
-                    'good_viewing_periods': total_good_nights
-                }
-            
-            batch_results.append(optimal_info)
-            
-        except Exception as e:
-            batch_results.append({
-                'best_date': None,
-                'best_time_local': 'N/A',
-                'max_altitude': 'Error',
-                'max_azimuth': 'N/A',
-                'direction': 'N/A',
-                'dark_start_local': 'N/A',
-                'dark_end_local': 'N/A',
-                'rise_time': 'N/A',
-                'rise_direction': 'N/A',
-                'set_time': 'N/A',
-                'set_direction': 'N/A',
-                'duration_hours': 0,
-                'dark_nights_per_year': 0,
-                'good_viewing_periods': 0
-            })
-    
-    return batch_results
 
 class StarTellerCLI:
     # ============================================================================
@@ -896,6 +771,7 @@ class StarTellerCLI:
     def find_optimal_viewing_times(self, min_altitude=20, direction_filter=None):
         """
         Find optimal viewing times for all objects in the catalog.
+        Uses multiprocessing with persistent workers for maximum CPU utilization.
         
         Args:
             min_altitude (float): Minimum altitude in degrees (default: 20)
@@ -904,14 +780,12 @@ class StarTellerCLI:
         Returns:
             pandas.DataFrame: Summary table with optimal viewing information
         """
-        results = []
-        
         print("Calculating optimal viewing times for deep sky objects...")
         print(f"Observer location: {self.latitude:.2f}°, {self.longitude:.2f}°")
         print(f"Local timezone: {self.local_tz}")
         print(f"Minimum altitude: {min_altitude}°")
         print("Dark time criteria: Sun below -18° (astronomical twilight)")
-        print("Note: Winter = longer dark periods, Summer = shorter dark periods")
+        print(f"Using {NUM_WORKERS} CPU cores for parallel processing...")
         
         if direction_filter:
             print(f"Direction filter: {direction_filter[0]}° to {direction_filter[1]}° azimuth")
@@ -919,167 +793,95 @@ class StarTellerCLI:
         # Remove duplicates (prefer Messier names over NGC names)
         unique_objects = {}
         for obj_id, obj_data in self.dso_catalog.items():
-            # Create a key based on coordinates (same coordinates = same object)
             coord_key = (round(obj_data['ra'], 4), round(obj_data['dec'], 4))
             
             if coord_key not in unique_objects:
                 unique_objects[coord_key] = (obj_id, obj_data)
             else:
-                # If we already have this object, prefer Messier names
                 existing_id, existing_data = unique_objects[coord_key]
                 if obj_id.startswith('M') and not existing_id.startswith('M'):
                     unique_objects[coord_key] = (obj_id, obj_data)
         
-        print(f"Removed {len(self.dso_catalog) - len(unique_objects)} duplicate objects")
+        print(f"Processing {len(unique_objects)} unique objects (removed {len(self.dso_catalog) - len(unique_objects)} duplicates)")
         
-        # OPTIMIZATION: Calculate night midpoints once for all objects (with caching)
-        print("Calculating night midpoints for the year...")
+        # Get night midpoints (cached)
+        print("Loading night midpoints...")
         night_midpoints = self.get_night_midpoints()
+        num_nights = len(night_midpoints)
         
-        # Process unique objects in batches with multithreading for better performance
+        # Pre-convert data to serializable formats for worker initialization
+        print("Preparing data for parallel processing...")
+        midpoint_times_utc = [mp[1].astimezone(pytz.UTC) for mp in night_midpoints]
+        
+        # Convert to timestamps (floats) for efficient serialization
+        t_array_data = [t.timestamp() for t in midpoint_times_utc]
+        
+        # Convert dates/times to ISO strings for worker initialization
+        night_dates_iso = [mp[0].isoformat() for mp in night_midpoints]
+        night_midpoint_isos = [mp[1].isoformat() for mp in night_midpoints]
+        night_dark_start_isos = [mp[2].isoformat() for mp in night_midpoints]
+        night_dark_end_isos = [mp[3].isoformat() for mp in night_midpoints]
+        
         items = list(unique_objects.values())
-        batch_size = 10  # Process 10 objects at once
+        local_tz_str = str(self.local_tz)
         
-        # Determine optimal number of processes (use all CPU cores, but cap at reasonable limit)
-        available_cores = multiprocessing.cpu_count()
-        max_batches = len(items) // batch_size + 1
+        # Get ephemeris path for workers
+        data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
+        eph_path = os.path.join(data_dir, 'de421.bsp')
         
-        # Use all cores, but don't exceed number of batches or a reasonable maximum
-        max_workers = min(available_cores, max_batches, 64)  # Cap at 64 for sanity
+        print(f"Computing altitudes for {len(items)} objects across {num_nights} nights...")
         
-        print(f"Detected {available_cores} CPU cores, using {max_workers} processes")
+        # Prepare work items - MINIMAL data only (night data is in worker globals)
+        work_items = [
+            (obj_id, obj_data['ra'], obj_data['dec'], obj_data['name'], obj_data['type'],
+             min_altitude, direction_filter)
+            for obj_id, obj_data in items
+        ]
         
-        # Create batches
-        batches = []
-        for i in range(0, len(items), batch_size):
-            batch = items[i:i + batch_size]
-            batches.append(batch)
+        # Process objects in parallel using Pool with initializer
+        # Night data is passed ONCE to initializer, not with every task!
+        results = []
         
-        print(f"Processing {len(batches)} batches using {max_workers} processes...")
+        # Column names for the tuple results
+        columns = ['Object', 'Name', 'Type', 'Best_Date', 'Best_Time_Local',
+                   'Max_Altitude_deg', 'Azimuth_deg', 'Direction',
+                   'Rise_Time_Local', 'Rise_Direction', 'Set_Time_Local', 'Set_Direction',
+                   'Observing_Duration_Hours', 'Dark_Nights_Per_Year', 'Good_Viewing_Periods',
+                   'Dark_Start_Local', 'Dark_End_Local']
         
-        # Prepare observer data for worker processes
-        observer_data = (self.latitude, self.longitude, self.elevation, str(self.local_tz))
+        with Pool(
+            processes=NUM_WORKERS,
+            initializer=_init_worker,
+            initargs=(self.latitude, self.longitude, self.elevation, eph_path,
+                      t_array_data, night_dates_iso, night_midpoint_isos,
+                      night_dark_start_isos, night_dark_end_isos, local_tz_str)
+        ) as pool:
+            # Use imap_unordered with large chunksize for minimal IPC overhead
+            chunksize = max(100, len(work_items) // NUM_WORKERS)
+            for result in tqdm(
+                pool.imap_unordered(_process_object_worker, work_items, chunksize=chunksize),
+                total=len(items),
+                desc="Processing objects",
+                unit="obj"
+            ):
+                results.append(result)
         
-        # Process batches in parallel using multiprocessing
-        all_batch_results = []
+        # Convert tuple results to DataFrame
+        results_df = pd.DataFrame(results, columns=columns)
+        results_df['Timezone'] = local_tz_str
         
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            # Submit all batch processing tasks
-            future_to_batch = {}
-            for batch in batches:
-                batch_data = (batch, min_altitude, direction_filter, night_midpoints, observer_data)
-                future = executor.submit(process_batch_worker, batch_data)
-                future_to_batch[future] = batch
-            
-            # Collect results with progress bar
-            for future in tqdm(as_completed(future_to_batch), total=len(batches), desc="Processing batches", unit="batch"):
-                batch = future_to_batch[future]
-                try:
-                    batch_results = future.result()
-                    all_batch_results.append((batch, batch_results))
-                except Exception as e:
-                    print(f"Error processing batch: {e}")
-                    # Create error results for this batch
-                    error_results = []
-                    for _ in range(len(batch)):
-                        error_results.append({
-                            'best_date': None,
-                            'best_time_local': 'N/A',
-                            'max_altitude': 'Error',
-                            'max_azimuth': 'N/A',
-                            'direction': 'N/A',
-                            'dark_start_local': 'N/A',
-                            'dark_end_local': 'N/A',
-                            'rise_time': 'N/A',
-                            'rise_direction': 'N/A',
-                            'set_time': 'N/A',
-                            'set_direction': 'N/A',
-                            'duration_hours': 0,
-                            'dark_nights_per_year': 0,
-                            'good_viewing_periods': 0
-                        })
-                    all_batch_results.append((batch, error_results))
-        
-        # Sort results back to original order to maintain consistency
-        batch_to_index = {id(batch): i for i, batch in enumerate(batches)}
-        sorted_results = sorted(all_batch_results, key=lambda x: batch_to_index[id(x[0])])
-        
-        # Process results in the original order for consistency
-        for batch, batch_results in sorted_results:
-            for (obj_id, obj_data), optimal_info in zip(batch, batch_results):
-                if optimal_info['best_date'] is not None:
-                    result_data = {
-                        # Object Information
-                        'Object': obj_id,
-                        'Name': obj_data['name'],
-                        'Type': obj_data['type'],
-                        
-                        # Best Viewing Information
-                        'Best_Date': optimal_info['best_date'],
-                        'Best_Time_Local': optimal_info['best_time_local'],
-                        'Max_Altitude_deg': optimal_info['max_altitude'],
-                        'Azimuth_deg': optimal_info['max_azimuth'],
-                        'Direction': optimal_info['direction'],
-                        
-                        # Object Observing Times
-                        'Rise_Time_Local': optimal_info['rise_time'],
-                        'Rise_Direction': optimal_info['rise_direction'],
-                        'Set_Time_Local': optimal_info['set_time'],
-                        'Set_Direction': optimal_info['set_direction'],
-                        'Observing_Duration_Hours': optimal_info['duration_hours'],
-                        
-                        # Statistics & Reference Info
-                        'Dark_Nights_Per_Year': optimal_info['dark_nights_per_year'],
-                        'Good_Viewing_Periods': optimal_info['good_viewing_periods'],
-                        'Dark_Start_Local': optimal_info['dark_start_local'],
-                        'Dark_End_Local': optimal_info['dark_end_local'],
-                        'Timezone': str(self.local_tz)
-                    }
-                    results.append(result_data)
-                else:
-                    results.append({
-                        # Object Information
-                        'Object': obj_id,
-                        'Name': obj_data['name'],
-                        'Type': obj_data['type'],
-                        
-                        # Best Viewing Information
-                        'Best_Date': 'N/A',
-                        'Best_Time_Local': 'N/A',
-                        'Max_Altitude_deg': 'Never visible',
-                        'Azimuth_deg': 'N/A',
-                        'Direction': 'N/A',
-                        
-                        # Object Observing Times
-                        'Rise_Time_Local': 'N/A',
-                        'Rise_Direction': 'N/A',
-                        'Set_Time_Local': 'N/A',
-                        'Set_Direction': 'N/A',
-                        'Observing_Duration_Hours': 0,
-                        
-                        # Statistics & Reference Info
-                        'Dark_Nights_Per_Year': 0,
-                        'Good_Viewing_Periods': 0,
-                        'Dark_Start_Local': 'N/A',
-                        'Dark_End_Local': 'N/A',
-                        'Timezone': str(self.local_tz)
-                    })
-        
-        results_df = pd.DataFrame(results)
-        
-        # Handle empty results gracefully
         if results_df.empty:
             return results_df
         
-        # Sort by maximum altitude (descending), handling 'Never visible' entries
+        # Sort by maximum altitude (descending)
         def sort_key(x):
             if isinstance(x, str) or x == 'Never visible':
-                return -999  # Put 'Never visible' at the end
+                return -999
             return x
         
         results_df['sort_altitude'] = results_df['Max_Altitude_deg'].apply(sort_key)
         results_df = results_df.sort_values('sort_altitude', ascending=False)
-        results_df = results_df.drop('sort_altitude', axis=1)  # Remove helper column
+        results_df = results_df.drop('sort_altitude', axis=1)
         
         return results_df
 
