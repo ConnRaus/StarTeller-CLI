@@ -24,6 +24,8 @@ warnings.filterwarnings('ignore')
 
 # Get optimal process count
 NUM_WORKERS = cpu_count() or 8
+# Use 2 cores for night midpoint calculations (as requested)
+NIGHT_MIDPOINT_WORKERS = 2
 
 # Global variables for worker processes (initialized once per worker)
 _worker_ts = None
@@ -186,6 +188,165 @@ def _process_object_worker(args):
     except Exception as e:
         return (obj_id, name, obj_type, 'N/A', 'N/A', 'Error', 'N/A', 
                 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 0, 0, 0, 'N/A', 'N/A')
+
+# Worker function for parallel year calculation
+def _calculate_year_midpoints_worker(args):
+    """
+    Worker function to calculate night midpoints for a single year.
+    This runs in a separate process for parallelization.
+    
+    Args:
+        args: Tuple of (year, latitude, longitude, elevation, local_tz_str, eph_path, location_hash)
+    
+    Returns:
+        tuple: (year, list of night midpoints) or (year, None) on error
+    """
+    year, latitude, longitude, elevation, local_tz_str, eph_path, location_hash = args
+    
+    try:
+        from datetime import date, datetime, timedelta
+        from skyfield.api import load, wgs84
+        import pytz
+        
+        # Initialize Skyfield objects in this worker process
+        ts = load.timescale()
+        if os.path.exists(eph_path):
+            eph = load(eph_path)
+        else:
+            eph = load('de421.bsp')
+        
+        earth = eph['earth']
+        sun = eph['sun']
+        local_tz = pytz.timezone(local_tz_str)
+        observer = earth + wgs84.latlon(latitude, longitude, elevation_m=elevation)
+        
+        # Calculate full year
+        full_year_start = date(year, 1, 1)
+        full_year_days = (date(year + 1, 1, 1) - full_year_start).days
+        
+        # For current year, don't calculate past today + 365 days for efficiency
+        if year == datetime.now().year:
+            max_date = date.today() + timedelta(days=365)
+            if date(year + 1, 1, 1) > max_date:
+                full_year_days = (max_date - full_year_start).days
+        
+        # Create coarse time grid across all days (every 15 minutes)
+        all_times = []
+        time_to_date = {}
+        
+        for day_offset in range(full_year_days):
+            check_date = full_year_start + timedelta(days=day_offset)
+            afternoon = local_tz.localize(datetime.combine(check_date, datetime.min.time().replace(hour=15)))
+            current_time = afternoon
+            end_time = afternoon + timedelta(hours=20)
+            
+            while current_time <= end_time:
+                all_times.append(current_time)
+                time_to_date[current_time] = check_date
+                current_time += timedelta(minutes=15)
+        
+        # Vectorized darkness calculation for all times at once
+        all_times_utc = [t.astimezone(pytz.UTC) for t in all_times]
+        t_array = ts.from_datetimes(all_times_utc)
+        
+        sun_astrometric = observer.at(t_array).observe(sun)
+        sun_alt, sun_az, sun_distance = sun_astrometric.apparent().altaz()
+        sun_altitudes = sun_alt.degrees
+        is_dark = sun_altitudes < -18.0
+        
+        # Find dark periods for each day
+        night_midpoints = []
+        
+        for day_offset in range(full_year_days):
+            check_date = full_year_start + timedelta(days=day_offset)
+            
+            # Find all times for this day
+            day_indices = []
+            day_times = []
+            day_sun_altitudes = []
+            
+            for i, time_dt in enumerate(all_times):
+                if time_to_date.get(time_dt) == check_date:
+                    day_indices.append(i)
+                    day_times.append(time_dt)
+                    day_sun_altitudes.append(sun_altitudes[i])
+            
+            if len(day_times) < 2:
+                continue
+            
+            # Find the dark period from coarse samples
+            dark_start_idx = None
+            dark_end_idx = None
+            
+            # Find first dark time (dark start)
+            for i in range(len(day_times) - 1):
+                if not is_dark[day_indices[i]] and is_dark[day_indices[i + 1]]:
+                    dark_start_idx = i
+                    break
+            
+            # Find last dark time (dark end)
+            for i in range(len(day_times) - 1, 0, -1):
+                if is_dark[day_indices[i - 1]] and not is_dark[day_indices[i]]:
+                    dark_end_idx = i
+                    break
+            
+            # Handle edge cases
+            if dark_start_idx is None:
+                if is_dark[day_indices[0]]:
+                    dark_start_idx = 0
+                else:
+                    continue
+            
+            if dark_end_idx is None:
+                if is_dark[day_indices[-1]]:
+                    dark_end_idx = len(day_times) - 1
+                else:
+                    continue
+            
+            # Use linear interpolation to find precise transition times
+            coarse_dark_start = day_times[dark_start_idx]
+            coarse_dark_end = day_times[dark_end_idx]
+            
+            # Interpolate dark start time
+            if dark_start_idx > 0:
+                t0 = day_times[dark_start_idx - 1]
+                t1 = day_times[dark_start_idx]
+                alt0 = day_sun_altitudes[dark_start_idx - 1]
+                alt1 = day_sun_altitudes[dark_start_idx]
+                
+                if alt0 != alt1:
+                    fraction = (-18.0 - alt0) / (alt1 - alt0)
+                    dark_start = t0 + (t1 - t0) * fraction
+                else:
+                    dark_start = coarse_dark_start
+            else:
+                dark_start = coarse_dark_start
+            
+            # Interpolate dark end time
+            if dark_end_idx < len(day_times) - 1:
+                t0 = day_times[dark_end_idx]
+                t1 = day_times[dark_end_idx + 1]
+                alt0 = day_sun_altitudes[dark_end_idx]
+                alt1 = day_sun_altitudes[dark_end_idx + 1]
+                
+                if alt0 != alt1:
+                    fraction = (-18.0 - alt0) / (alt1 - alt0)
+                    dark_end = t0 + (t1 - t0) * fraction
+                else:
+                    dark_end = coarse_dark_end
+            else:
+                dark_end = coarse_dark_end
+            
+            # Calculate midpoint
+            if dark_start and dark_end and dark_end > dark_start:
+                dark_duration = dark_end - dark_start
+                midpoint = dark_start + dark_duration / 2
+                night_midpoints.append((check_date, midpoint, dark_start, dark_end))
+        
+        return (year, night_midpoints)
+    except Exception as e:
+        print(f"Error calculating midpoints for year {year}: {e}")
+        return (year, None)
 
 # Vectorized helper functions for fast computation
 def _azimuth_to_cardinal(azimuth):
@@ -595,29 +756,38 @@ class StarTellerCLI:
             return sorted(all_cached_midpoints, key=lambda x: x[0])
         
         # Calculate missing years efficiently - calculate full years for better caching
-        print("Calculating night midpoints with 1-minute precision using binary search...")
-        
+        # OPTIMIZATION: Calculate multiple years in parallel using 2 cores
         if missing_years:
             print(f"Missing cache for years: {missing_years}")
+            print(f"Calculating {len(missing_years)} year(s) in parallel using {NIGHT_MIDPOINT_WORKERS} cores...")
         
         all_calculated_midpoints = []
         
-        # Calculate full years for missing data
-        for year in sorted(missing_years):
-            full_year_start = date(year, 1, 1)
-            full_year_days = (date(year + 1, 1, 1) - full_year_start).days
+        if missing_years:
+            # Prepare arguments for parallel processing
+            data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
+            eph_path = os.path.join(data_dir, 'de421.bsp')
+            local_tz_str = str(self.local_tz)
             
-            # For current year, don't calculate past today + 365 days for efficiency
-            if year == datetime.now().year:
-                max_date = date.today() + timedelta(days=365)
-                if date(year + 1, 1, 1) > max_date:
-                    full_year_days = (max_date - full_year_start).days
+            year_args = [
+                (year, self.latitude, self.longitude, self.elevation, 
+                 local_tz_str, eph_path, self.location_hash)
+                for year in sorted(missing_years)
+            ]
             
-            # Use the internal calculation method
-            year_midpoints = self._calculate_night_midpoints(full_year_start, full_year_days, year)
-            if year_midpoints:
-                self._save_cache(year_midpoints, year)
-                all_calculated_midpoints.extend(year_midpoints)
+            # Calculate years in parallel
+            if len(missing_years) > 1 and NIGHT_MIDPOINT_WORKERS > 1:
+                with Pool(processes=min(NIGHT_MIDPOINT_WORKERS, len(missing_years))) as pool:
+                    results = pool.map(_calculate_year_midpoints_worker, year_args)
+            else:
+                # Single year or single worker - calculate sequentially
+                results = [_calculate_year_midpoints_worker(args) for args in year_args]
+            
+            # Process results and save to cache
+            for year, year_midpoints in results:
+                if year_midpoints:
+                    self._save_cache(year_midpoints, year)
+                    all_calculated_midpoints.extend(year_midpoints)
         
         # Combine cached and calculated data
         all_midpoints = all_cached_midpoints + all_calculated_midpoints
@@ -633,7 +803,7 @@ class StarTellerCLI:
     def _calculate_night_midpoints(self, start_date, days, year=None):
         """
         Internal implementation: Calculate night midpoints using vectorized approach.
-        Uses coarse grid search + targeted binary search for optimal performance.
+        Uses coarse grid search + linear interpolation for optimal performance.
         
         Args:
             start_date (date): Start date for calculation
@@ -642,19 +812,19 @@ class StarTellerCLI:
         """
         from datetime import datetime, timedelta
         
-        # OPTIMIZATION: Use vectorized coarse grid search + targeted binary search
-        # This reduces calculations from ~8000 to ~800 for a full year
+        # OPTIMIZATION: Use vectorized coarse grid search + linear interpolation
+        # This eliminates expensive binary search with individual sun position calls
         
         print(f"Calculating night midpoints for {days} days using optimized vectorized approach...")
         
-        # Step 1: Create coarse time grid across all days (every 30 minutes)
+        # Step 1: Create coarse time grid across all days (every 15 minutes for better precision)
         all_times = []
         time_to_date = {}
         
         for day_offset in range(days):
             check_date = start_date + timedelta(days=day_offset)
             
-            # Sample every 30 minutes from 3 PM to 11 AM next day
+            # Sample every 15 minutes from 3 PM to 11 AM next day
             afternoon = self.local_tz.localize(datetime.combine(check_date, datetime.min.time().replace(hour=15)))
             current_time = afternoon
             end_time = afternoon + timedelta(hours=20)  # 3 PM to 11 AM next day
@@ -662,7 +832,7 @@ class StarTellerCLI:
             while current_time <= end_time:
                 all_times.append(current_time)
                 time_to_date[current_time] = check_date
-                current_time += timedelta(minutes=30)
+                current_time += timedelta(minutes=15)
         
         # Step 2: Vectorized darkness calculation for all times at once
         print(f"Calculating sun positions for {len(all_times)} sample times...")
@@ -672,7 +842,8 @@ class StarTellerCLI:
         # Single vectorized calculation for all times
         sun_astrometric = self.observer.at(t_array).observe(self.sun)
         sun_alt, sun_az, sun_distance = sun_astrometric.apparent().altaz()
-        is_dark = sun_alt.degrees < -18.0
+        sun_altitudes = sun_alt.degrees
+        is_dark = sun_altitudes < -18.0
         
         # Step 3: Find dark periods for each day using the coarse grid
         night_midpoints = []
@@ -681,13 +852,15 @@ class StarTellerCLI:
             check_date = start_date + timedelta(days=day_offset)
             
             # Find all times for this day
+            day_indices = []
             day_times = []
-            day_darkness = []
+            day_sun_altitudes = []
             
             for i, time_dt in enumerate(all_times):
                 if time_to_date.get(time_dt) == check_date:
+                    day_indices.append(i)
                     day_times.append(time_dt)
-                    day_darkness.append(is_dark[i])
+                    day_sun_altitudes.append(sun_altitudes[i])
             
             if len(day_times) < 2:
                 continue
@@ -697,21 +870,21 @@ class StarTellerCLI:
             dark_end_idx = None
             
             # Find first dark time (dark start)
-            for i in range(len(day_darkness) - 1):
-                if not day_darkness[i] and day_darkness[i + 1]:
+            for i in range(len(day_times) - 1):
+                if not is_dark[day_indices[i]] and is_dark[day_indices[i + 1]]:
                     dark_start_idx = i
                     break
             
             # Find last dark time (dark end)
-            for i in range(len(day_darkness) - 1, 0, -1):
-                if day_darkness[i - 1] and not day_darkness[i]:
+            for i in range(len(day_times) - 1, 0, -1):
+                if is_dark[day_indices[i - 1]] and not is_dark[day_indices[i]]:
                     dark_end_idx = i
                     break
             
             # Handle edge cases
             if dark_start_idx is None:
                 # Check if it's already dark at start
-                if day_darkness[0]:
+                if is_dark[day_indices[0]]:
                     dark_start_idx = 0
                 else:
                     # No dark period found
@@ -719,40 +892,48 @@ class StarTellerCLI:
             
             if dark_end_idx is None:
                 # Check if it's still dark at end
-                if day_darkness[-1]:
-                    dark_end_idx = len(day_darkness) - 1
+                if is_dark[day_indices[-1]]:
+                    dark_end_idx = len(day_times) - 1
                 else:
                     # No dark period found
                     continue
             
-            # Step 4: Refine dark start and end times with targeted binary search
-            # Only search in small windows around the coarse estimates
+            # Step 4: Use linear interpolation to find precise transition times
+            # This is much faster than binary search with individual sun position calls
             
             coarse_dark_start = day_times[dark_start_idx]
             coarse_dark_end = day_times[dark_end_idx]
             
-            # Binary search for precise dark start (search 1 hour around coarse estimate)
+            # Interpolate dark start time
             if dark_start_idx > 0:
-                search_start = day_times[dark_start_idx - 1]
-                search_end = min(day_times[dark_start_idx + 1] if dark_start_idx + 1 < len(day_times) else day_times[dark_start_idx], 
-                               day_times[dark_start_idx] + timedelta(hours=1))
-                dark_start = self._find_transition_time(search_start, search_end, True)
+                t0 = day_times[dark_start_idx - 1]
+                t1 = day_times[dark_start_idx]
+                alt0 = day_sun_altitudes[dark_start_idx - 1]
+                alt1 = day_sun_altitudes[dark_start_idx]
+                
+                # Linear interpolation to find when sun altitude crosses -18°
+                if alt0 != alt1:  # Avoid division by zero
+                    fraction = (-18.0 - alt0) / (alt1 - alt0)
+                    dark_start = t0 + (t1 - t0) * fraction
+                else:
+                    dark_start = coarse_dark_start
             else:
                 dark_start = coarse_dark_start
             
-            # Binary search for precise dark end (search 1 hour around coarse estimate)
+            # Interpolate dark end time
             if dark_end_idx < len(day_times) - 1:
-                search_start = max(day_times[dark_end_idx - 1] if dark_end_idx > 0 else day_times[dark_end_idx],
-                                 day_times[dark_end_idx] - timedelta(hours=1))
-                search_end = day_times[dark_end_idx + 1] if dark_end_idx + 1 < len(day_times) else day_times[dark_end_idx]
-                dark_end = self._find_transition_time(search_start, search_end, False)
+                t0 = day_times[dark_end_idx]
+                t1 = day_times[dark_end_idx + 1]
+                alt0 = day_sun_altitudes[dark_end_idx]
+                alt1 = day_sun_altitudes[dark_end_idx + 1]
+                
+                # Linear interpolation to find when sun altitude crosses -18°
+                if alt0 != alt1:  # Avoid division by zero
+                    fraction = (-18.0 - alt0) / (alt1 - alt0)
+                    dark_end = t0 + (t1 - t0) * fraction
+                else:
+                    dark_end = coarse_dark_end
             else:
-                dark_end = coarse_dark_end
-            
-            # Fallback to coarse estimates if binary search fails
-            if dark_start is None:
-                dark_start = coarse_dark_start
-            if dark_end is None:
                 dark_end = coarse_dark_end
             
             # Calculate midpoint
@@ -810,13 +991,18 @@ class StarTellerCLI:
         num_nights = len(night_midpoints)
         
         # Pre-convert data to serializable formats for worker initialization
+        # OPTIMIZATION: Use efficient list comprehensions and batch operations
         print("Preparing data for parallel processing...")
-        midpoint_times_utc = [mp[1].astimezone(pytz.UTC) for mp in night_midpoints]
         
-        # Convert to timestamps (floats) for efficient serialization
+        # Pre-convert timezone once (avoid repeated lookups)
+        utc_tz = pytz.UTC
+        
+        # Batch convert all datetimes to UTC and timestamps using list comprehensions
+        # This is faster than appending in a loop
+        midpoint_times_utc = [mp[1].astimezone(utc_tz) for mp in night_midpoints]
         t_array_data = [t.timestamp() for t in midpoint_times_utc]
         
-        # Convert dates/times to ISO strings for worker initialization
+        # Batch convert to ISO strings using list comprehensions
         night_dates_iso = [mp[0].isoformat() for mp in night_midpoints]
         night_midpoint_isos = [mp[1].isoformat() for mp in night_midpoints]
         night_dark_start_isos = [mp[2].isoformat() for mp in night_midpoints]
