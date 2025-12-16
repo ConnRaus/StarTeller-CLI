@@ -1311,7 +1311,7 @@ def main():
     print("3. NGC Objects (~8,000 New General Catalog objects)")
     print("4. All Objects (~13,000 NGC + IC objects)")
     
-    catalog_choice = input("Enter choice (1-4, default 1): ").strip() or "1"
+    catalog_choice = input("Enter choice (1-4, default 4): ").strip() or "4"
 
     
     # Get viewing preferences
