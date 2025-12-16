@@ -28,77 +28,165 @@ NUM_WORKERS = cpu_count() or 8
 NIGHT_MIDPOINT_WORKERS = 2
 
 # Global variables for worker processes (initialized once per worker)
-_worker_ts = None
-_worker_observer = None
-_worker_eph = None
-_worker_t_array = None
+_worker_latitude = None
+_worker_longitude = None
+_worker_lst_array = None  # Local Sidereal Time for each night (radians)
 _worker_night_dates = None
-_worker_night_midpoint_locals = None
-_worker_night_dark_starts = None
-_worker_night_dark_ends = None
+_worker_night_midpoint_ts = None  # Store timestamps, create datetime on-demand
+_worker_night_dark_start_ts = None
+_worker_night_dark_end_ts = None
 _worker_local_tz = None
 _worker_local_tz_str = None
 
+def _calculate_lst(jd_array, longitude_deg):
+    """
+    Calculate Local Sidereal Time for an array of Julian dates.
+    Uses the standard formula for mean sidereal time.
+    
+    Args:
+        jd_array: numpy array of Julian dates (UT1)
+        longitude_deg: observer longitude in degrees (East positive)
+    
+    Returns:
+        numpy array of LST in radians
+    """
+    # Julian centuries from J2000.0
+    T = (jd_array - 2451545.0) / 36525.0
+    
+    # Greenwich Mean Sidereal Time in degrees (IAU 1982 formula)
+    # This gives GMST at 0h UT, then we add the UT1 fraction of day
+    jd_floor = np.floor(jd_array - 0.5) + 0.5  # JD at preceding midnight
+    day_fraction = jd_array - jd_floor  # Fraction of day since midnight
+    
+    T0 = (jd_floor - 2451545.0) / 36525.0  # Julian centuries at midnight
+    
+    # GMST at midnight in degrees
+    gmst_midnight = 100.4606184 + 36000.77004 * T0 + 0.000387933 * T0**2 - (T0**3) / 38710000.0
+    
+    # Add rotation for time since midnight (360.98564736629 deg per day = sidereal rate)
+    gmst_deg = gmst_midnight + 360.98564736629 * day_fraction
+    
+    # Convert to LST by adding longitude
+    lst_deg = gmst_deg + longitude_deg
+    
+    # Normalize to 0-360
+    lst_deg = lst_deg % 360.0
+    
+    # Convert to radians
+    return np.deg2rad(lst_deg)
+
+def _calc_alt_az_fast(ra_deg, dec_deg, lst_rad, lat_rad):
+    """
+    Calculate altitude and azimuth using pure numpy.
+    
+    This is MUCH faster than Skyfield for fixed stars because:
+    1. No ephemeris file loading needed
+    2. Pure vectorized numpy operations
+    3. No object creation overhead
+    
+    Args:
+        ra_deg: Right Ascension in degrees
+        dec_deg: Declination in degrees  
+        lst_rad: Local Sidereal Time array in radians
+        lat_rad: Observer latitude in radians
+    
+    Returns:
+        alt_deg, az_deg: numpy arrays of altitude and azimuth in degrees
+    """
+    # Convert to radians
+    ra_rad = np.deg2rad(ra_deg)
+    dec_rad = np.deg2rad(dec_deg)
+    
+    # Hour angle = LST - RA
+    ha_rad = lst_rad - ra_rad
+    
+    # Altitude calculation
+    sin_alt = (np.sin(dec_rad) * np.sin(lat_rad) + 
+               np.cos(dec_rad) * np.cos(lat_rad) * np.cos(ha_rad))
+    alt_rad = np.arcsin(np.clip(sin_alt, -1.0, 1.0))
+    
+    # Azimuth calculation
+    cos_alt = np.cos(alt_rad)
+    # Avoid division by zero at zenith
+    cos_alt = np.where(np.abs(cos_alt) < 1e-10, 1e-10, cos_alt)
+    
+    sin_az = -np.cos(dec_rad) * np.sin(ha_rad) / cos_alt
+    cos_az = (np.sin(dec_rad) - np.sin(lat_rad) * np.sin(alt_rad)) / (np.cos(lat_rad) * cos_alt)
+    
+    az_rad = np.arctan2(sin_az, cos_az)
+    
+    # Convert to degrees
+    alt_deg = np.rad2deg(alt_rad)
+    az_deg = np.rad2deg(az_rad) % 360.0  # Normalize to 0-360
+    
+    return alt_deg, az_deg
+
 def _init_worker(latitude, longitude, elevation, eph_path, t_array_data, 
-                 night_dates_iso, night_midpoint_isos, night_dark_start_isos, 
-                 night_dark_end_isos, local_tz_str):
-    """Initialize worker process with ALL shared data (called once per worker)."""
-    global _worker_ts, _worker_observer, _worker_eph, _worker_t_array
-    global _worker_night_dates, _worker_night_midpoint_locals
-    global _worker_night_dark_starts, _worker_night_dark_ends
+                 night_dates_tuples, night_midpoint_ts, night_dark_start_ts, 
+                 night_dark_end_ts, local_tz_str):
+    """Initialize worker process with ALL shared data (called once per worker).
+    
+    OPTIMIZED: No ephemeris file loading! Uses pure numpy for altitude/azimuth calculation.
+    This eliminates the 14MB file load that was causing slow worker initialization.
+    """
+    global _worker_latitude, _worker_longitude, _worker_lst_array
+    global _worker_night_dates, _worker_night_midpoint_ts
+    global _worker_night_dark_start_ts, _worker_night_dark_end_ts
     global _worker_local_tz, _worker_local_tz_str
     
-    from skyfield.api import load, wgs84
+    import time
+    import os
+    t0 = time.perf_counter()
+    
     from datetime import date
+    import numpy as np
+    t_imports = time.perf_counter()
     
-    # Initialize Skyfield objects
-    _worker_ts = load.timescale()
-    if os.path.exists(eph_path):
-        _worker_eph = load(eph_path)
-    else:
-        _worker_eph = load('de421.bsp')
-    
-    earth = _worker_eph['earth']
-    _worker_observer = earth + wgs84.latlon(latitude, longitude, elevation_m=elevation)
+    # Store observer location
+    _worker_latitude = latitude
+    _worker_longitude = longitude
     
     # Initialize timezone
     _worker_local_tz_str = local_tz_str
     _worker_local_tz = pytz.timezone(local_tz_str)
+    t_tz = time.perf_counter()
     
-    # Pre-compute time array ONCE per worker (not per object!)
-    midpoint_times_utc = [datetime.fromtimestamp(ts, tz=pytz.UTC) for ts in t_array_data]
-    _worker_t_array = _worker_ts.from_datetimes(midpoint_times_utc)
+    # Convert Unix timestamps to Julian dates and pre-calculate LST
+    # This is the ONLY calculation we need - no ephemeris required!
+    t_array_np = np.asarray(t_array_data)
+    jd_array = t_array_np / 86400.0 + 2440587.5
+    _worker_lst_array = _calculate_lst(jd_array, longitude)
+    t_lst = time.perf_counter()
     
-    # Pre-parse all night data ONCE per worker
-    _worker_night_dates = [date.fromisoformat(s) for s in night_dates_iso]
-    _worker_night_midpoint_locals = [datetime.fromisoformat(s) for s in night_midpoint_isos]
-    _worker_night_dark_starts = [datetime.fromisoformat(s) for s in night_dark_start_isos]
-    _worker_night_dark_ends = [datetime.fromisoformat(s) for s in night_dark_end_isos]
+    # Reconstruct dates from (year, month, day) tuples
+    _worker_night_dates = [date(y, m, d) for y, m, d in night_dates_tuples]
+    t_dates = time.perf_counter()
+    
+    # Store timestamps directly - create datetime objects on-demand in worker function
+    _worker_night_midpoint_ts = night_midpoint_ts
+    _worker_night_dark_start_ts = night_dark_start_ts
+    _worker_night_dark_end_ts = night_dark_end_ts
+    
+    # Print timing from first worker only
+    pid = os.getpid()
+    print(f"    [Worker {pid}] imports={t_imports-t0:.3f}s, tz={t_tz-t_imports:.3f}s, lst={t_lst-t_tz:.3f}s, dates={t_dates-t_lst:.3f}s, total={t_dates-t0:.3f}s")
 
 def _process_object_worker(args):
     """Worker function to process a single object (runs in subprocess)."""
-    global _worker_ts, _worker_observer, _worker_t_array
-    global _worker_night_dates, _worker_night_midpoint_locals
-    global _worker_night_dark_starts, _worker_night_dark_ends
+    global _worker_latitude, _worker_longitude, _worker_lst_array
+    global _worker_night_dates, _worker_night_midpoint_ts
+    global _worker_night_dark_start_ts, _worker_night_dark_end_ts
     global _worker_local_tz, _worker_local_tz_str
     
     # Only receive minimal object data - night data is already in worker globals!
     obj_id, ra, dec, name, obj_type, min_altitude, direction_filter = args
     
-    from skyfield.api import Star
     import numpy as np
     
     try:
-        # Create Star object
-        star = Star(ra_hours=ra/15.0, dec_degrees=dec)
-        
-        # VECTORIZED: Calculate alt/az for ALL nights at once
-        # Uses pre-computed _worker_t_array
-        astrometric = _worker_observer.at(_worker_t_array).observe(star)
-        alt, az, _ = astrometric.apparent().altaz()
-        
-        alt_degrees = alt.degrees
-        az_degrees = az.degrees
+        # FAST: Calculate alt/az using pure numpy - no Skyfield needed!
+        lat_rad = np.deg2rad(_worker_latitude)
+        alt_degrees, az_degrees = _calc_alt_az_fast(ra, dec, _worker_lst_array, lat_rad)
         
         # Apply filters
         above_altitude = alt_degrees >= min_altitude
@@ -126,20 +214,25 @@ def _process_object_worker(args):
         best_altitude = round(float(alt_degrees[best_idx]), 1)
         best_azimuth = round(float(az_degrees[best_idx]), 1)
         best_date = _worker_night_dates[best_idx]
-        best_midpoint = _worker_night_midpoint_locals[best_idx]
-        best_dark_start = _worker_night_dark_starts[best_idx]
-        best_dark_end = _worker_night_dark_ends[best_idx]
         
-        # Calculate rise/set times with simplified approach
-        start_utc = best_dark_start.astimezone(pytz.UTC)
-        end_utc = best_dark_end.astimezone(pytz.UTC)
+        # Create datetime objects on-demand from timestamps (only for best night)
+        best_midpoint = datetime.fromtimestamp(_worker_night_midpoint_ts[best_idx], tz=_worker_local_tz)
+        best_dark_start = datetime.fromtimestamp(_worker_night_dark_start_ts[best_idx], tz=_worker_local_tz)
+        best_dark_end = datetime.fromtimestamp(_worker_night_dark_end_ts[best_idx], tz=_worker_local_tz)
         
-        t_endpoints = _worker_ts.from_datetimes([start_utc, end_utc])
-        endpoint_astrometric = _worker_observer.at(t_endpoints).observe(star)
-        endpoint_alt, endpoint_az, _ = endpoint_astrometric.apparent().altaz()
+        # Calculate rise/set times using fast numpy approach
+        start_ts = _worker_night_dark_start_ts[best_idx]
+        end_ts = _worker_night_dark_end_ts[best_idx]
         
-        start_alt, end_alt = endpoint_alt.degrees[0], endpoint_alt.degrees[1]
-        start_az, end_az = endpoint_az.degrees[0], endpoint_az.degrees[1]
+        # Convert timestamps to Julian dates and calculate LST
+        jd_endpoints = np.array([start_ts, end_ts]) / 86400.0 + 2440587.5
+        lst_endpoints = _calculate_lst(jd_endpoints, _worker_longitude)
+        
+        # Calculate alt/az at start and end of dark period
+        endpoint_alt, endpoint_az = _calc_alt_az_fast(ra, dec, lst_endpoints, lat_rad)
+        
+        start_alt, end_alt = endpoint_alt[0], endpoint_alt[1]
+        start_az, end_az = endpoint_az[0], endpoint_az[1]
         
         def meets_dir(az):
             if direction_filter is None:
@@ -966,7 +1059,6 @@ class StarTellerCLI:
         print(f"Local timezone: {self.local_tz}")
         print(f"Minimum altitude: {min_altitude}°")
         print("Dark time criteria: Sun below -18° (astronomical twilight)")
-        print(f"Using {NUM_WORKERS} CPU cores for parallel processing...")
         
         if direction_filter:
             print(f"Direction filter: {direction_filter[0]}° to {direction_filter[1]}° azimuth")
@@ -985,28 +1077,38 @@ class StarTellerCLI:
         
         print(f"Processing {len(unique_objects)} unique objects (removed {len(self.dso_catalog) - len(unique_objects)} duplicates)")
         
+        import time
+        
         # Get night midpoints (cached)
         print("Loading night midpoints...")
+        t_start = time.perf_counter()
         night_midpoints = self.get_night_midpoints()
         num_nights = len(night_midpoints)
+        print(f"  ✓ Loaded {num_nights} nights in {time.perf_counter() - t_start:.2f}s")
         
         # Pre-convert data to serializable formats for worker initialization
-        # OPTIMIZATION: Use efficient list comprehensions and batch operations
+        # OPTIMIZATION: Single pass through data, use numpy arrays for faster serialization
         print("Preparing data for parallel processing...")
+        t_start = time.perf_counter()
         
         # Pre-convert timezone once (avoid repeated lookups)
         utc_tz = pytz.UTC
+        num_nights = len(night_midpoints)
         
-        # Batch convert all datetimes to UTC and timestamps using list comprehensions
-        # This is faster than appending in a loop
-        midpoint_times_utc = [mp[1].astimezone(utc_tz) for mp in night_midpoints]
-        t_array_data = [t.timestamp() for t in midpoint_times_utc]
+        # Single pass through night_midpoints to extract all data at once
+        # This is faster than multiple list comprehensions
+        night_dates_tuples = []
+        t_array_data = np.empty(num_nights, dtype=np.float64)
+        night_midpoint_ts = np.empty(num_nights, dtype=np.float64)
+        night_dark_start_ts = np.empty(num_nights, dtype=np.float64)
+        night_dark_end_ts = np.empty(num_nights, dtype=np.float64)
         
-        # Batch convert to ISO strings using list comprehensions
-        night_dates_iso = [mp[0].isoformat() for mp in night_midpoints]
-        night_midpoint_isos = [mp[1].isoformat() for mp in night_midpoints]
-        night_dark_start_isos = [mp[2].isoformat() for mp in night_midpoints]
-        night_dark_end_isos = [mp[3].isoformat() for mp in night_midpoints]
+        for i, (date_obj, midpoint, dark_start, dark_end) in enumerate(night_midpoints):
+            night_dates_tuples.append((date_obj.year, date_obj.month, date_obj.day))
+            t_array_data[i] = midpoint.astimezone(utc_tz).timestamp()
+            night_midpoint_ts[i] = midpoint.timestamp()
+            night_dark_start_ts[i] = dark_start.timestamp()
+            night_dark_end_ts[i] = dark_end.timestamp()
         
         items = list(unique_objects.values())
         local_tz_str = str(self.local_tz)
@@ -1014,8 +1116,7 @@ class StarTellerCLI:
         # Get ephemeris path for workers
         data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
         eph_path = os.path.join(data_dir, 'de421.bsp')
-        
-        print(f"Computing altitudes for {len(items)} objects across {num_nights} nights...")
+        print(f"  ✓ Data prepared in {time.perf_counter() - t_start:.2f}s")
         
         # Prepare work items - MINIMAL data only (night data is in worker globals)
         work_items = [
@@ -1035,15 +1136,27 @@ class StarTellerCLI:
                    'Observing_Duration_Hours', 'Dark_Nights_Per_Year', 'Good_Viewing_Periods',
                    'Dark_Start_Local', 'Dark_End_Local']
         
+        # Use all available workers - init is now fast without ephemeris loading!
+        num_workers = NUM_WORKERS
+        
+        print(f"Initializing {num_workers} worker processes...")
+        t_start = time.perf_counter()
+        
         with Pool(
-            processes=NUM_WORKERS,
+            processes=num_workers,
             initializer=_init_worker,
             initargs=(self.latitude, self.longitude, self.elevation, eph_path,
-                      t_array_data, night_dates_iso, night_midpoint_isos,
-                      night_dark_start_isos, night_dark_end_isos, local_tz_str)
+                      t_array_data, night_dates_tuples, night_midpoint_ts,
+                      night_dark_start_ts, night_dark_end_ts, local_tz_str)
         ) as pool:
+            t_init = time.perf_counter()
+            print(f"  ✓ Workers initialized in {t_init - t_start:.2f}s")
+            
+            print(f"Computing altitudes for {len(items)} objects across {num_nights} nights...")
+            t_compute = time.perf_counter()
+            
             # Use imap_unordered with large chunksize for minimal IPC overhead
-            chunksize = max(100, len(work_items) // NUM_WORKERS)
+            chunksize = max(100, len(work_items) // num_workers)
             for result in tqdm(
                 pool.imap_unordered(_process_object_worker, work_items, chunksize=chunksize),
                 total=len(items),
@@ -1051,6 +1164,9 @@ class StarTellerCLI:
                 unit="obj"
             ):
                 results.append(result)
+        
+        print(f"  ✓ Computation completed in {time.perf_counter() - t_compute:.2f}s")
+        print(f"  ✓ Total processing time: {time.perf_counter() - t_start:.2f}s")
         
         # Convert tuple results to DataFrame
         results_df = pd.DataFrame(results, columns=columns)
