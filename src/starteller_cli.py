@@ -4,27 +4,28 @@ StarTeller-CLI - Optimal Deep Sky Object Viewing Time Calculator
 A command-line tool to find the best times to observe deep sky objects throughout the year.
 """
 
-import pandas as pd
-import numpy as np
 import os
 import pickle
 import hashlib
+import warnings
 from datetime import datetime, timedelta
-# Skyfield imports removed - using fast numpy calculations instead
-from timezonefinder import TimezoneFinder
+from multiprocessing import Pool, cpu_count
+
+import numpy as np
+import pandas as pd
 import pytz
+from timezonefinder import TimezoneFinder
+from tqdm import tqdm
+
 try:
     from .catalog_manager import load_ngc_catalog
 except ImportError:
     from catalog_manager import load_ngc_catalog
-from tqdm import tqdm
-from multiprocessing import Pool, cpu_count
-import warnings
+
 warnings.filterwarnings('ignore')
 
-# Get optimal process count
+# Process counts for parallel operations
 NUM_WORKERS = cpu_count() or 8
-# Use 2 cores for night midpoint calculations
 NIGHT_MIDPOINT_WORKERS = 2
 
 # Global variables for worker processes (initialized once per worker)
@@ -121,14 +122,9 @@ def _calc_alt_az_fast(ra_deg, dec_deg, lst_rad, lat_rad):
     
     return alt_deg, az_deg
 
-def _init_worker(latitude, longitude, elevation, eph_path, t_array_data, 
-                 night_dates_tuples, night_midpoint_ts, night_dark_start_ts, 
-                 night_dark_end_ts, local_tz_str):
-    """Initialize worker process with ALL shared data (called once per worker).
-    
-    OPTIMIZED: No ephemeris file loading! Uses pure numpy for altitude/azimuth calculation.
-    This eliminates the 14MB file load that was causing slow worker initialization.
-    """
+def _init_worker(latitude, longitude, t_array_data, night_dates_tuples, 
+                 night_midpoint_ts, night_dark_start_ts, night_dark_end_ts, local_tz_str):
+    """Initialize worker process with shared data (called once per worker)."""
     global _worker_latitude, _worker_longitude, _worker_lst_array
     global _worker_night_dates, _worker_night_midpoint_ts
     global _worker_night_dark_start_ts, _worker_night_dark_end_ts
@@ -146,7 +142,7 @@ def _init_worker(latitude, longitude, elevation, eph_path, t_array_data,
     _worker_local_tz = pytz.timezone(local_tz_str)
     
     # Convert Unix timestamps to Julian dates and pre-calculate LST
-    # This is the ONLY calculation we need - no ephemeris required!
+    # Pre-calculate Local Sidereal Time for all nights
     t_array_np = np.asarray(t_array_data)
     jd_array = t_array_np / 86400.0 + 2440587.5
     _worker_lst_array = _calculate_lst(jd_array, longitude)
@@ -401,15 +397,13 @@ def _calculate_year_midpoints_worker(args):
     Worker function to calculate night midpoints for a single year.
     This runs in a separate process for parallelization.
     
-    OPTIMIZED: Uses fast numpy sun position calculation instead of ephemeris.
-    
     Args:
-        args: Tuple of (year, latitude, longitude, elevation, local_tz_str, eph_path, location_hash)
+        args: Tuple of (year, latitude, longitude, local_tz_str, location_hash)
     
     Returns:
         tuple: (year, list of night midpoints) or (year, None) on error
     """
-    year, latitude, longitude, elevation, local_tz_str, eph_path, location_hash = args
+    year, latitude, longitude, local_tz_str, location_hash = args
     
     try:
         from datetime import date, datetime, timedelta
@@ -428,8 +422,7 @@ def _calculate_year_midpoints_worker(args):
             if date(year + 1, 1, 1) > max_date:
                 full_year_days = (max_date - full_year_start).days
         
-        # OPTIMIZED: Create timestamps directly as numpy array
-        # Each day: 81 samples from 15:00 to 11:00 next day (20 hours, every 15 min)
+        # 81 samples per day (15:00 to 11:00 next day, every 15 min)
         samples_per_day = 81
         total_samples = full_year_days * samples_per_day
         
@@ -714,7 +707,7 @@ class StarTellerCLI:
                 abs(cache_data['longitude'] - self.longitude) < 0.0001 and
                 cache_data['timezone'] == str(self.local_tz)):
                 
-                # Cache loaded successfully (silent)
+                pass  # Cache loaded
                 return cache_data['night_midpoints']
             else:
                 # Cache mismatch - will recalculate silently
@@ -819,7 +812,7 @@ class StarTellerCLI:
         Returns:
             numpy.array: Boolean array indicating dark times
         """
-        # OPTIMIZED: Use fast sun position calculation instead of ephemeris
+        # Calculate sun altitude for darkness check
         timestamps = np.array([t.timestamp() for t in times])
         jd_array = timestamps / 86400.0 + 2440587.5
         sun_altitudes = _calc_sun_altitude_fast(jd_array, self.latitude, self.longitude)
@@ -939,14 +932,9 @@ class StarTellerCLI:
         all_calculated_midpoints = []
         
         if missing_years:
-            # Prepare arguments for parallel processing
-            data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
-            eph_path = os.path.join(data_dir, 'de421.bsp')
             local_tz_str = str(self.local_tz)
-            
             year_args = [
-                (year, self.latitude, self.longitude, self.elevation, 
-                 local_tz_str, eph_path, self.location_hash)
+                (year, self.latitude, self.longitude, local_tz_str, self.location_hash)
                 for year in sorted(missing_years)
             ]
             
@@ -989,10 +977,8 @@ class StarTellerCLI:
         """
         from datetime import datetime, timedelta
         
-        # Fast numpy calculation - no prints needed
         
-        # OPTIMIZED: Create timestamps directly as numpy array
-        # Each day: 81 samples from 15:00 to 11:00 next day (20 hours, every 15 min)
+        # 81 samples per day (15:00 to 11:00 next day, every 15 min)
         samples_per_day = 81
         total_samples = days * samples_per_day
         
@@ -1100,7 +1086,6 @@ class StarTellerCLI:
                 
                 night_midpoints.append((check_date, midpoint, dark_start, dark_end))
         
-        # Calculation complete
         return night_midpoints
     
     # ============================================================================
@@ -1169,40 +1154,27 @@ class StarTellerCLI:
         items = list(unique_objects.values())
         local_tz_str = str(self.local_tz)
         
-        # Get ephemeris path for workers (legacy, not actually used)
-        data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
-        eph_path = os.path.join(data_dir, 'de421.bsp')
-        
-        # Prepare work items - MINIMAL data only (night data is in worker globals)
+        # Prepare work items
         work_items = [
             (obj_id, obj_data['ra'], obj_data['dec'], obj_data['name'], obj_data['type'],
              min_altitude, direction_filter)
             for obj_id, obj_data in items
         ]
         
-        # Process objects in parallel using Pool with initializer
-        # Night data is passed ONCE to initializer, not with every task!
         results = []
-        
-        # Column names for the tuple results
         columns = ['Object', 'Name', 'Type', 'Best_Date', 'Best_Time_Local',
                    'Max_Altitude_deg', 'Azimuth_deg', 'Direction',
                    'Rise_Time_Local', 'Rise_Direction', 'Set_Time_Local', 'Set_Direction',
                    'Observing_Duration_Hours', 'Dark_Nights_Per_Year', 'Good_Viewing_Periods',
                    'Dark_Start_Local', 'Dark_End_Local']
         
-        # Use all available workers
-        num_workers = NUM_WORKERS
-        
         with Pool(
-            processes=num_workers,
+            processes=NUM_WORKERS,
             initializer=_init_worker,
-            initargs=(self.latitude, self.longitude, self.elevation, eph_path,
-                      t_array_data, night_dates_tuples, night_midpoint_ts,
-                      night_dark_start_ts, night_dark_end_ts, local_tz_str)
+            initargs=(self.latitude, self.longitude, t_array_data, night_dates_tuples,
+                      night_midpoint_ts, night_dark_start_ts, night_dark_end_ts, local_tz_str)
         ) as pool:
-            # Use imap_unordered with large chunksize for minimal IPC overhead
-            chunksize = max(100, len(work_items) // num_workers)
+            chunksize = max(100, len(work_items) // NUM_WORKERS)
             for result in tqdm(
                 pool.imap_unordered(_process_object_worker, work_items, chunksize=chunksize),
                 total=len(items),
