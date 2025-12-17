@@ -309,8 +309,15 @@ def load_ngc_catalog(catalog_filter="all"):
                 return f"M {number}"
             return name
         
+        # Fix M040 -> M40 (only case in addendum that needs fixing)
+        def normalize_messier_id(name):
+            """Fix M040 to M40"""
+            if name == 'M040':
+                return 'M40'
+            return name
+        
         catalog_df = pd.DataFrame({
-            'object_id': df['Name'],
+            'object_id': df['Name'].apply(normalize_messier_id),
             'name': df['Name'].apply(clean_name),
             'ra_deg': df['ra_deg'],
             'dec_deg': df['dec_deg'],
