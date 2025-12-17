@@ -32,7 +32,6 @@ NIGHT_MIDPOINT_WORKERS = 2
 
 
 def get_user_data_dir():
-    """Get platform-specific user data directory for StarTeller-CLI."""
     if sys.platform == 'win32':
         # Windows: %LOCALAPPDATA%\StarTeller-CLI
         base = os.environ.get('LOCALAPPDATA', os.path.expanduser('~'))
@@ -46,7 +45,6 @@ def get_user_data_dir():
 
 
 def get_cache_dir():
-    """Get platform-specific cache directory for StarTeller-CLI."""
     if sys.platform == 'win32':
         # Windows: %LOCALAPPDATA%\StarTeller-CLI\cache
         return get_user_data_dir() / 'cache'
@@ -59,9 +57,6 @@ def get_cache_dir():
 
 
 def get_output_dir():
-    """Get output directory - defaults to current working directory."""
-    # Output CSV files go to current directory by default
-    # User can change directory before running if they want
     return Path.cwd() / 'starteller_output'
 
 # Global variables for worker processes (initialized once per worker)
@@ -77,28 +72,22 @@ _worker_local_tz_str = None
 
 def _calculate_lst(jd_array, longitude_deg):
     """
-    Calculate Local Sidereal Time for an array of Julian dates.
-    Uses the standard formula for mean sidereal time.
-    
-    Args:
-        jd_array: numpy array of Julian dates (UT1)
-        longitude_deg: observer longitude in degrees (East positive)
-    
-    Returns:
-        numpy array of LST in radians
+    Calculate Local Sidereal Time for an array of Julian dates
+    Chapter 12 of https://auass.com/wp-content/uploads/2021/01/Astronomical-Algorithms.pdf
+
+    Takes: numpy array of Julian dates (UT1) and longitude in degrees
+    Returns: numpy array of Local Sidereal Times in radians
     """
-    # Julian centuries from J2000.0
-    T = (jd_array - 2451545.0) / 36525.0
     
-    # Greenwich Mean Sidereal Time in degrees (IAU 1982 formula)
-    # This gives GMST at 0h UT, then we add the UT1 fraction of day
-    jd_floor = np.floor(jd_array - 0.5) + 0.5  # JD at preceding midnight
-    day_fraction = jd_array - jd_floor  # Fraction of day since midnight
+    # Find 0h UT1 Julian date (needed for equation) and fraction of day
+    jd_floor = np.floor(jd_array - 0.5) + 0.5  
+    day_fraction = jd_array - jd_floor  
     
-    T0 = (jd_floor - 2451545.0) / 36525.0  # Julian centuries at midnight
+    # Julian centuries (Eq 12.1)
+    T = (jd_floor - 2451545.0) / 36525.0 
     
-    # GMST at midnight in degrees
-    gmst_midnight = 100.4606184 + 36000.77004 * T0 + 0.000387933 * T0**2 - (T0**3) / 38710000.0
+    # GMST at midnight in degrees (Eq 12.3)
+    gmst_midnight = 100.46061837 + 36000.770053608 * T + 0.000387933 * T**2 - (T**3) / 38710000.0
     
     # Add rotation for time since midnight (360.98564736629 deg per day = sidereal rate)
     gmst_deg = gmst_midnight + 360.98564736629 * day_fraction
@@ -114,21 +103,10 @@ def _calculate_lst(jd_array, longitude_deg):
 
 def _calc_alt_az_fast(ra_deg, dec_deg, lst_rad, lat_rad):
     """
-    Calculate altitude and azimuth using pure numpy.
+    Calculate altitude and azimuth
     
-    This is MUCH faster than Skyfield for fixed stars because:
-    1. No ephemeris file loading needed
-    2. Pure vectorized numpy operations
-    3. No object creation overhead
-    
-    Args:
-        ra_deg: Right Ascension in degrees
-        dec_deg: Declination in degrees  
-        lst_rad: Local Sidereal Time array in radians
-        lat_rad: Observer latitude in radians
-    
-    Returns:
-        alt_deg, az_deg: numpy arrays of altitude and azimuth in degrees
+    Takes: Right Ascension, Declination, Local Sidereal Time array, and observer latitude
+    Returns: alt_deg, az_deg: numpy arrays of altitude and azimuth in degrees
     """
     # Convert to radians
     ra_rad = np.deg2rad(ra_deg)
@@ -204,7 +182,7 @@ def _process_object_worker(args):
     import numpy as np
     
     try:
-        # FAST: Calculate alt/az using pure numpy - no Skyfield needed!
+        # Calculate alt/az
         lat_rad = np.deg2rad(_worker_latitude)
         alt_degrees, az_degrees = _calc_alt_az_fast(ra, dec, _worker_lst_array, lat_rad)
         
