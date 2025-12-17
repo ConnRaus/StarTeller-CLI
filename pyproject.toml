@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "starteller-cli"
 version = "1.0.0"
-description = "A comprehensive command-line tool for astrophotographers to find optimal viewing times for deep sky objects"
+description = "A command-line tool for astrophotographers to find optimal viewing times for deep sky objects"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
@@ -24,6 +24,16 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 requires-python = ">=3.8"
+keywords = [
+    "astronomy",
+    "astrophotography",
+    "telescope",
+    "deep-sky-objects",
+    "ngc",
+    "messier",
+    "observing",
+    "astronomical-calculations",
+]
 dependencies = [
     "pandas>=1.5.0",
     "numpy>=1.21.0",
