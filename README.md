@@ -6,18 +6,29 @@ Given your location, StarTeller calculates when each object in the NGC/IC/Messie
 
 ## Installation
 
-### Install as a package
+### Install from PyPI (Recommended)
+
+```bash
+pip install starteller-cli
+starteller
+```
+
+That's it! The `starteller` command will be available in your terminal.
+
+### Install from Source (Development)
+
+If you want to modify the code or install the latest development version:
 
 ```bash
 git clone https://github.com/ConnRaus/StarTeller-CLI.git
 cd StarTeller-CLI
 python -m venv venv
-venv\Scripts\activate  # On Linux/Mac: source venv/bin/activate
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install .
 starteller
 ```
 
-### Or run directly
+Or run directly without installing:
 
 ```bash
 git clone https://github.com/ConnRaus/StarTeller-CLI.git
@@ -39,47 +50,51 @@ The first run downloads the NGC catalog (~2MB) and calculates night darkness tim
 
 Results go to `starteller_output/` in your current directory. The CSV includes:
 
-| Column | Description |
-|--------|-------------|
-| Object | NGC/IC/Messier ID |
-| Name | Common name if available |
-| Type | Galaxy, Nebula, Cluster, etc. |
-| Best_Date | Date when object is highest at midnight |
-| Best_Time_Local | Time of peak altitude |
-| Max_Altitude_deg | Maximum altitude reached |
-| Azimuth_deg | Azimuth angle at peak altitude |
-| Direction | Cardinal direction (N, NE, E, etc.) |
-| Rise_Time_Local | When it rises above your minimum altitude |
-| Rise_Direction | Direction it rises from |
-| Set_Time_Local | When it drops below minimum altitude |
-| Set_Direction | Direction it sets toward |
-| Observing_Duration_Hours | Total time above minimum altitude |
-| Dark_Nights_Per_Year | Number of nights with astronomical darkness |
-| Good_Viewing_Periods | Number of good viewing periods |
-| Dark_Start_Local | Start of astronomical darkness |
-| Dark_End_Local | End of astronomical darkness |
-| Timezone | Timezone used for local times |
+| Column                   | Description                                 |
+| ------------------------ | ------------------------------------------- |
+| Object                   | NGC/IC/Messier ID                           |
+| Name                     | Common name if available                    |
+| Type                     | Galaxy, Nebula, Cluster, etc.               |
+| Best_Date                | Date when object is highest at midnight     |
+| Best_Time_Local          | Time of peak altitude                       |
+| Max_Altitude_deg         | Maximum altitude reached                    |
+| Azimuth_deg              | Azimuth angle at peak altitude              |
+| Direction                | Cardinal direction (N, NE, E, etc.)         |
+| Rise_Time_Local          | When it rises above your minimum altitude   |
+| Rise_Direction           | Direction it rises from                     |
+| Set_Time_Local           | When it drops below minimum altitude        |
+| Set_Direction            | Direction it sets toward                    |
+| Observing_Duration_Hours | Total time above minimum altitude           |
+| Dark_Nights_Per_Year     | Number of nights with astronomical darkness |
+| Good_Viewing_Periods     | Number of good viewing periods              |
+| Dark_Start_Local         | Start of astronomical darkness              |
+| Dark_End_Local           | End of astronomical darkness                |
+| Timezone                 | Timezone used for local times               |
 
 ## Options
 
 **Catalogs:**
+
 - Messier (~110 objects)
 - NGC (~8,000 objects)
 - IC (~5,000 objects)
 - All (~13,000 objects)
 
 **Filters:**
+
 - Minimum altitude (default 20°)
 - Direction filter - e.g., `90,180` for objects in the East to South
 
 ## Python API
 
+You can also use StarTeller programmatically:
+
 ```python
 from src.starteller_cli import StarTellerCLI
 
 st = StarTellerCLI(
-    latitude=40.7, 
-    longitude=-74.0, 
+    latitude=40.7,
+    longitude=-74.0,
     elevation=10,
     catalog_filter='messier'
 )
