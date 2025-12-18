@@ -44,7 +44,7 @@ python src/starteller_cli.py
 3. Set minimum altitude and optional direction filter
 4. Get a CSV with optimal viewing times for each object
 
-The first run downloads the NGC catalog (~2MB) and calculates night darkness times for the year. Both are cached, so subsequent runs are fast.
+The first run downloads the NGC catalog and Addendum (~4MB) and calculates night darkness times for the year. Both are cached, so subsequent runs are fast.
 
 ## Output
 

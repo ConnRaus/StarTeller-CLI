@@ -8,7 +8,6 @@ import os
 import pickle
 import hashlib
 import sys
-import warnings
 from datetime import datetime, timedelta
 from multiprocessing import Pool, cpu_count
 from pathlib import Path
@@ -24,15 +23,12 @@ try:
 except ImportError:
     from catalog_manager import load_ngc_catalog
 
-warnings.filterwarnings('ignore')
-
 # Process counts for parallel operations
 NUM_WORKERS = cpu_count() or 8
 NIGHT_MIDPOINT_WORKERS = 2
 
 
 def get_user_data_dir():
-    """Get platform-specific user data directory for StarTeller-CLI."""
     if sys.platform == 'win32':
         # Windows: %LOCALAPPDATA%\StarTeller-CLI
         base = os.environ.get('LOCALAPPDATA', os.path.expanduser('~'))
@@ -46,7 +42,6 @@ def get_user_data_dir():
 
 
 def get_cache_dir():
-    """Get platform-specific cache directory for StarTeller-CLI."""
     if sys.platform == 'win32':
         # Windows: %LOCALAPPDATA%\StarTeller-CLI\cache
         return get_user_data_dir() / 'cache'
@@ -59,17 +54,14 @@ def get_cache_dir():
 
 
 def get_output_dir():
-    """Get output directory - defaults to current working directory."""
-    # Output CSV files go to current directory by default
-    # User can change directory before running if they want
     return Path.cwd() / 'starteller_output'
 
-# Global variables for worker processes (initialized once per worker)
+# Global variables for worker processes
 _worker_latitude = None
 _worker_longitude = None
-_worker_lst_array = None  # Local Sidereal Time for each night (radians)
+_worker_lst_array = None
 _worker_night_dates = None
-_worker_night_midpoint_ts = None  # Store timestamps, create datetime on-demand
+_worker_night_midpoint_ts = None 
 _worker_night_dark_start_ts = None
 _worker_night_dark_end_ts = None
 _worker_local_tz = None
@@ -77,28 +69,22 @@ _worker_local_tz_str = None
 
 def _calculate_lst(jd_array, longitude_deg):
     """
-    Calculate Local Sidereal Time for an array of Julian dates.
-    Uses the standard formula for mean sidereal time.
-    
-    Args:
-        jd_array: numpy array of Julian dates (UT1)
-        longitude_deg: observer longitude in degrees (East positive)
-    
-    Returns:
-        numpy array of LST in radians
+    Calculate Local Sidereal Time for an array of Julian dates
+    Chapter 12 of https://auass.com/wp-content/uploads/2021/01/Astronomical-Algorithms.pdf
+
+    Takes: numpy array of Julian dates (UT1) and longitude in degrees
+    Returns: numpy array of Local Sidereal Times in radians
     """
-    # Julian centuries from J2000.0
-    T = (jd_array - 2451545.0) / 36525.0
     
-    # Greenwich Mean Sidereal Time in degrees (IAU 1982 formula)
-    # This gives GMST at 0h UT, then we add the UT1 fraction of day
-    jd_floor = np.floor(jd_array - 0.5) + 0.5  # JD at preceding midnight
-    day_fraction = jd_array - jd_floor  # Fraction of day since midnight
+    # Find 0h UT1 Julian date (needed for equation) and fraction of day
+    jd_floor = np.floor(jd_array - 0.5) + 0.5  
+    day_fraction = jd_array - jd_floor  
     
-    T0 = (jd_floor - 2451545.0) / 36525.0  # Julian centuries at midnight
+    # Julian centuries (Eq 12.1)
+    T = (jd_floor - 2451545.0) / 36525.0 
     
-    # GMST at midnight in degrees
-    gmst_midnight = 100.4606184 + 36000.77004 * T0 + 0.000387933 * T0**2 - (T0**3) / 38710000.0
+    # GMST at midnight in degrees (Eq 12.3)
+    gmst_midnight = 100.46061837 + 36000.770053608 * T + 0.000387933 * T**2 - (T**3) / 38710000.0
     
     # Add rotation for time since midnight (360.98564736629 deg per day = sidereal rate)
     gmst_deg = gmst_midnight + 360.98564736629 * day_fraction
@@ -114,21 +100,10 @@ def _calculate_lst(jd_array, longitude_deg):
 
 def _calc_alt_az_fast(ra_deg, dec_deg, lst_rad, lat_rad):
     """
-    Calculate altitude and azimuth using pure numpy.
+    Calculate altitude and azimuth
     
-    This is MUCH faster than Skyfield for fixed stars because:
-    1. No ephemeris file loading needed
-    2. Pure vectorized numpy operations
-    3. No object creation overhead
-    
-    Args:
-        ra_deg: Right Ascension in degrees
-        dec_deg: Declination in degrees  
-        lst_rad: Local Sidereal Time array in radians
-        lat_rad: Observer latitude in radians
-    
-    Returns:
-        alt_deg, az_deg: numpy arrays of altitude and azimuth in degrees
+    Takes: Right Ascension, Declination, Local Sidereal Time array, and observer latitude
+    Returns: alt_deg, az_deg: numpy arrays of altitude and azimuth in degrees
     """
     # Convert to radians
     ra_rad = np.deg2rad(ra_deg)
@@ -169,11 +144,8 @@ def _init_worker(latitude, longitude, t_array_data, night_dates_tuples,
     from datetime import date
     import numpy as np
     
-    # Store observer location
     _worker_latitude = latitude
     _worker_longitude = longitude
-    
-    # Initialize timezone
     _worker_local_tz_str = local_tz_str
     _worker_local_tz = pytz.timezone(local_tz_str)
     
@@ -198,17 +170,14 @@ def _process_object_worker(args):
     global _worker_night_dark_start_ts, _worker_night_dark_end_ts
     global _worker_local_tz, _worker_local_tz_str
     
-    # Only receive minimal object data - night data is already in worker globals!
+    # Only receive minimal object data
     obj_id, ra, dec, name, obj_type, min_altitude, direction_filter = args
     
     import numpy as np
     
     try:
-        # FAST: Calculate alt/az using pure numpy - no Skyfield needed!
         lat_rad = np.deg2rad(_worker_latitude)
         alt_degrees, az_degrees = _calc_alt_az_fast(ra, dec, _worker_lst_array, lat_rad)
-        
-        # Apply filters
         above_altitude = alt_degrees >= min_altitude
         
         if direction_filter:
@@ -235,22 +204,20 @@ def _process_object_worker(args):
         best_azimuth = round(float(az_degrees[best_idx]), 1)
         best_date = _worker_night_dates[best_idx]
         
-        # Create datetime objects on-demand from timestamps (only for best night)
+        # Create datetime objects from timestamps (only for best night)
         best_midpoint = datetime.fromtimestamp(_worker_night_midpoint_ts[best_idx], tz=_worker_local_tz)
         best_dark_start = datetime.fromtimestamp(_worker_night_dark_start_ts[best_idx], tz=_worker_local_tz)
         best_dark_end = datetime.fromtimestamp(_worker_night_dark_end_ts[best_idx], tz=_worker_local_tz)
         
-        # Calculate rise/set times by sampling altitude throughout the dark period
+        # Calculate rise/set times by sampling altitude every 15 mins
         start_ts = _worker_night_dark_start_ts[best_idx]
         end_ts = _worker_night_dark_end_ts[best_idx]
         
-        # Sample 48 points throughout the night (every ~15 minutes for a 12-hour night)
         num_samples = 48
         sample_ts = np.linspace(start_ts, end_ts, num_samples)
         jd_samples = sample_ts / 86400.0 + 2440587.5
         lst_samples = _calculate_lst(jd_samples, _worker_longitude)
         
-        # Calculate altitude at all sample points
         sample_alt, sample_az = _calc_alt_az_fast(ra, dec, lst_samples, lat_rad)
         
         # Apply direction filter if specified
@@ -352,7 +319,6 @@ def _process_object_worker(args):
                 set_dir = _azimuth_to_cardinal(best_azimuth)
                 duration = round(np.sum(visible) / num_samples * dark_duration_hours, 1)
         
-        # Return as tuple (much faster to serialize than dict!)
         return (obj_id, name, obj_type, best_date, best_midpoint.strftime('%H:%M'),
                 best_altitude, best_azimuth, _azimuth_to_cardinal(best_azimuth),
                 rise_time, rise_dir, set_time, set_dir, duration,
@@ -365,55 +331,44 @@ def _process_object_worker(args):
 
 def _calc_sun_position(jd_array):
     """
-    Calculate sun's RA and Dec for an array of Julian dates.
-    Uses the simplified solar position algorithm - accurate to ~0.01 degrees.
+    Calculate sun's RA and Dec for an array of julian dates.
+    Equations from https://aa.usno.navy.mil/faq/sun_approx
     
-    This is MUCH faster than loading an ephemeris file.
-    
-    Args:
-        jd_array: numpy array of Julian dates
-        
-    Returns:
-        ra_deg, dec_deg: numpy arrays of sun RA and Dec in degrees
+    Takes: numpy array of julian dates
+    Returns: numpy arrays of sun RA and Dec in degrees 
     """
     # Days since J2000.0
     n = jd_array - 2451545.0
     
-    # Mean longitude of the Sun (degrees)
-    L = (280.460 + 0.9856474 * n) % 360.0
-    
     # Mean anomaly of the Sun (degrees)
     g = np.deg2rad((357.528 + 0.9856003 * n) % 360.0)
+
+    # Mean longitude of the Sun (degrees)
+    q = (280.459 + 0.985647436 * n) % 360.0
     
-    # Ecliptic longitude of the Sun (degrees)
-    lambda_sun = L + 1.915 * np.sin(g) + 0.020 * np.sin(2 * g)
-    lambda_rad = np.deg2rad(lambda_sun)
+    # Apprent ecliptic longitude of the Sun (degrees)
+    L = q + 1.915 * np.sin(g) + 0.020 * np.sin(2 * g)
+    L_rad = np.deg2rad(L)
     
-    # Obliquity of the ecliptic (degrees) - varies slowly over centuries
-    epsilon = np.deg2rad(23.439 - 0.0000004 * n)
+    # Obliquity of the ecliptic (degrees)
+    e = np.deg2rad(23.439 - 0.00000036 * n)
     
     # Sun's Right Ascension
-    ra_rad = np.arctan2(np.cos(epsilon) * np.sin(lambda_rad), np.cos(lambda_rad))
+    ra_rad = np.arctan2(np.cos(e) * np.sin(L_rad), np.cos(L_rad))
     ra_deg = np.rad2deg(ra_rad) % 360.0
     
     # Sun's Declination
-    dec_rad = np.arcsin(np.sin(epsilon) * np.sin(lambda_rad))
+    dec_rad = np.arcsin(np.sin(e) * np.sin(L_rad))
     dec_deg = np.rad2deg(dec_rad)
     
     return ra_deg, dec_deg
 
 def _calc_sun_altitude_fast(jd_array, latitude, longitude):
     """
-    Calculate sun altitude for an array of Julian dates using pure numpy.
-    No ephemeris loading required!
-    
-    Args:
-        jd_array: numpy array of Julian dates
-        latitude: observer latitude in degrees
-        longitude: observer longitude in degrees
-        
-    Returns:
-        numpy array of sun altitudes in degrees
+    Calculate sun altitude for an array of julian dates
+
+    Takes: numpy array of julian dates, lat(deg), long(deg)
+    Returns: numpy array of sun altitudes in degrees
     """
     # Get sun RA/Dec
     sun_ra, sun_dec = _calc_sun_position(jd_array)
@@ -421,7 +376,7 @@ def _calc_sun_altitude_fast(jd_array, latitude, longitude):
     # Calculate Local Sidereal Time
     lst_rad = _calculate_lst(jd_array, longitude)
     
-    # Calculate altitude using the same fast function
+    # Calculate altitude
     lat_rad = np.deg2rad(latitude)
     alt_deg, _ = _calc_alt_az_fast(sun_ra, sun_dec, lst_rad, lat_rad)
     
@@ -431,13 +386,9 @@ def _calc_sun_altitude_fast(jd_array, latitude, longitude):
 def _calculate_year_midpoints_worker(args):
     """
     Worker function to calculate night midpoints for a single year.
-    This runs in a separate process for parallelization.
     
-    Args:
-        args: Tuple of (year, latitude, longitude, local_tz_str, location_hash)
-    
-    Returns:
-        tuple: (year, list of night midpoints) or (year, None) on error
+    Takes: Tuple of (year, latitude, longitude, local_tz_str, location_hash)
+    Returns: tuple: (year, list of night midpoints) or (year, None) on error
     """
     year, latitude, longitude, local_tz_str, location_hash = args
     
@@ -462,7 +413,7 @@ def _calculate_year_midpoints_worker(args):
         samples_per_day = 81
         total_samples = full_year_days * samples_per_day
         
-        # Build timestamp array efficiently
+        # Build timestamp array
         base_timestamps = np.zeros(total_samples, dtype=np.float64)
         day_indices = np.zeros(total_samples, dtype=np.int32)
         
@@ -477,14 +428,14 @@ def _calculate_year_midpoints_worker(args):
                 base_timestamps[start_idx + i] = base_ts + i * 900  # 900 seconds = 15 minutes
                 day_indices[start_idx + i] = day_offset
         
-        # Convert all timestamps to Julian dates at once
+        # Convert all timestamps to Julian dates
         jd_array = base_timestamps / 86400.0 + 2440587.5
         
-        # FAST: Calculate sun altitude for ALL times at once using pure numpy
+        # Calculate sun altitude for all times at once
         sun_altitudes = _calc_sun_altitude_fast(jd_array, latitude, longitude)
         is_dark = sun_altitudes < -18.0
         
-        # Find dark periods for each day - OPTIMIZED with numpy indexing
+        # Find dark periods for each day
         night_midpoints = []
         
         for day_offset in range(full_year_days):
@@ -502,13 +453,13 @@ def _calculate_year_midpoints_worker(args):
             dark_start_sample = None
             dark_end_sample = None
             
-            # Find first dark time (dark start) - transition from light to dark
+            # Find dark start time
             for i in range(len(day_dark) - 1):
                 if not day_dark[i] and day_dark[i + 1]:
                     dark_start_sample = i
                     break
             
-            # Find last dark time (dark end) - transition from dark to light
+            # Find dark end time
             for i in range(len(day_dark) - 1, 0, -1):
                 if day_dark[i - 1] and not day_dark[i]:
                     dark_end_sample = i
@@ -527,8 +478,7 @@ def _calculate_year_midpoints_worker(args):
                 else:
                     continue
             
-            # Use linear interpolation to find precise transition times
-            # Interpolate dark start time
+            # Linear interpolate dark start time
             if dark_start_sample > 0:
                 ts0 = day_timestamps[dark_start_sample - 1]
                 ts1 = day_timestamps[dark_start_sample]
@@ -543,7 +493,7 @@ def _calculate_year_midpoints_worker(args):
             else:
                 dark_start_ts = day_timestamps[dark_start_sample]
             
-            # Interpolate dark end time
+            # Linear interpolate dark end time
             if dark_end_sample < len(day_dark) - 1:
                 ts0 = day_timestamps[dark_end_sample]
                 ts1 = day_timestamps[dark_end_sample + 1]
@@ -574,9 +524,7 @@ def _calculate_year_midpoints_worker(args):
         print(f"Error calculating midpoints for year {year}: {e}")
         return (year, None)
 
-# Vectorized helper functions for fast computation
 def _azimuth_to_cardinal(azimuth):
-    """Convert azimuth angle to cardinal direction."""
     if isinstance(azimuth, np.ndarray):
         # Vectorized version for numpy arrays
         result = np.empty(azimuth.shape, dtype='U2')
@@ -608,13 +556,8 @@ class StarTellerCLI:
     
     def __init__(self, latitude, longitude, elevation=0, catalog_filter="all"):
         """
-        Initialize StarTellerCLI with observer location.
-        
-        Args:
-            latitude (float): Observer latitude in degrees
-            longitude (float): Observer longitude in degrees  
-            elevation (float): Observer elevation in meters (default: 0)
-            catalog_filter (str): Catalog type filter ("messier", "ic", "ngc", "all")
+        Initialize StarTellerCLI with observer location.      
+        Args: lat(float), long(float), *elevation(m), *catalog filter(string)
         """
         self.latitude = latitude
         self.longitude = longitude
@@ -633,10 +576,7 @@ class StarTellerCLI:
             self.local_tz = pytz.UTC
             print("✓ Timezone: UTC (could not auto-detect)")
         
-        # NOTE: Ephemeris loading removed - we now use fast numpy calculations
-        # for both sun position (darkness times) and star positions (alt/az)
-        
-        # Load deep sky object catalog
+        # Load catalog
         self.dso_catalog = self._setup_catalog(catalog_filter)
     
     def _generate_location_hash(self):
@@ -648,15 +588,7 @@ class StarTellerCLI:
         return hashlib.md5(location_string.encode()).hexdigest()[:8]
     
     def _setup_catalog(self, catalog_filter):
-        """
-        Load and setup the deep sky object catalog.
-        
-        Args:
-            catalog_filter (str): Catalog type filter ("messier", "ic", "ngc", "all")
-            
-        Returns:
-            dict: StarTellerCLI-compatible catalog dictionary
-        """
+        # Takes catalog filter, returns catalog dictionary
         filter_names = {
             "messier": "Messier Objects",
             "ic": "IC Objects", 
@@ -672,7 +604,8 @@ class StarTellerCLI:
                 print("Failed to load NGC catalog - please ensure NGC.csv file is present")
                 return {}
             
-            # Convert to StarTellerCLI format
+            # Convert to dictionary, allows instant access by obj_id
+            # Also better to give dict for multiprocessing than pickled pandas db
             catalog_dict = {}
             for _, row in catalog_df.iterrows():
                 obj_id = row['object_id']
@@ -700,7 +633,6 @@ class StarTellerCLI:
     # ============================================================================
     
     def _get_cache_filepath(self, year=None):
-        """Get the cache filepath for night midpoints."""
         if year is None:
             year = datetime.now().year
         cache_dir = get_cache_dir()
@@ -708,7 +640,6 @@ class StarTellerCLI:
         return cache_dir / f"night_midpoints_{self.location_hash}_{year}.pkl"
     
     def _save_cache(self, night_midpoints, year):
-        """Save night midpoints to cache file."""
         try:
             cache_file = self._get_cache_filepath(year)
             cache_data = {
@@ -729,7 +660,6 @@ class StarTellerCLI:
             return False
     
     def _load_cache(self, year):
-        """Load night midpoints from cache file."""
         try:
             cache_file = self._get_cache_filepath(year)
             if not cache_file.exists():
@@ -746,167 +676,12 @@ class StarTellerCLI:
                 pass  # Cache loaded
                 return cache_data['night_midpoints']
             else:
-                # Cache mismatch - will recalculate silently
+                # Cache mismatch, recalculate
                 return None
                 
         except Exception as e:
             print(f"Warning: Could not load night midpoints cache: {e}")
             return None
-    
-    def manage_cache_files(self, action="status"):
-        """
-        Manage cached night midpoints data.
-        
-        Args:
-            action (str): "status" to show cache info, "clear" to delete cache files
-        """
-        cache_dir = get_cache_dir()
-        
-        if action == "status":
-            print(f"\nCache Status for Location: {self.latitude:.4f}°, {self.longitude:.4f}°")
-            print(f"Location Hash: {self.location_hash}")
-            print(f"Cache Directory: {cache_dir}")
-            
-            if not cache_dir.exists():
-                print("No cache directory found.")
-                return
-            
-            # Find cache files for this location
-            cache_files = list(cache_dir.glob(f"night_midpoints_{self.location_hash}_*.pkl"))
-            
-            if not cache_files:
-                print("No cached night midpoints found for this location.")
-                return
-            
-            print(f"Found {len(cache_files)} cached year(s):")
-            total_size = 0
-            for cache_file in sorted(cache_files):
-                file_size = cache_file.stat().st_size
-                total_size += file_size
-                
-                # Extract year from filename
-                year = cache_file.stem.split('_')[-1]
-                
-                # Get creation date
-                try:
-                    with open(str(cache_file), 'rb') as f:
-                        cache_data = pickle.load(f)
-                    created_date = cache_data.get('created_date', 'Unknown')
-                    nights_count = len(cache_data.get('night_midpoints', []))
-                    print(f"  {year}: {nights_count} nights, {file_size/1024:.1f} KB, created: {created_date}")
-                except:
-                    print(f"  {year}: {file_size/1024:.1f} KB (corrupted)")
-            
-            print(f"Total cache size: {total_size/1024:.1f} KB")
-            
-        elif action == "clear":
-            if not cache_dir.exists():
-                print("No cache directory found.")
-                return
-            
-            # Find and delete cache files for this location
-            cache_files = list(cache_dir.glob(f"night_midpoints_{self.location_hash}_*.pkl"))
-            deleted_count = 0
-            for cache_file in cache_files:
-                try:
-                    cache_file.unlink()
-                    deleted_count += 1
-                    print(f"Deleted: {cache_file.name}")
-                except Exception as e:
-                    print(f"Error deleting {cache_file.name}: {e}")
-            
-            if deleted_count == 0:
-                print("No cache files found for this location.")
-            else:
-                print(f"Deleted {deleted_count} cache file(s).")
-        
-        else:
-            print(f"Unknown action: {action}. Use 'status' or 'clear'.")
-    
-    # ============================================================================
-    # ASTRONOMICAL UTILITIES
-    # ============================================================================
-    
-    def _is_dark_sky(self, times):
-        """
-        Check if times are during astronomical darkness (sun below -18°).
-        
-        Astronomical twilight occurs when the sun is 18° or more below the horizon.
-        This is the darkest natural condition when even the faintest stars are visible.
-        Perfect for astrophotography as there's no interference from scattered sunlight.
-        
-        Winter = longer dark periods (up to 14+ hours at mid-latitudes)
-        Summer = shorter dark periods (as little as 4-6 hours at mid-latitudes)
-        
-        Args:
-            times (list): List of datetime objects (UTC)
-            
-        Returns:
-            numpy.array: Boolean array indicating dark times
-        """
-        # Calculate sun altitude for darkness check
-        timestamps = np.array([t.timestamp() for t in times])
-        jd_array = timestamps / 86400.0 + 2440587.5
-        sun_altitudes = _calc_sun_altitude_fast(jd_array, self.latitude, self.longitude)
-        
-        # Astronomical twilight: sun below -18 degrees
-        return sun_altitudes < -18.0
-    
-    def _find_transition_time(self, start_time, end_time, looking_for_dark_start=True):
-        """
-        Find precise time when sky transitions between light and dark.
-        
-        Args:
-            start_time, end_time: Search window (local time)
-            looking_for_dark_start: If True, find light->dark transition. If False, find dark->light.
-            
-        Returns:
-            datetime: Transition time or None if no transition found
-        """
-        # Early exit if window too small
-        if (end_time - start_time).total_seconds() < 120:
-            return None
-        
-        def is_dark_at_time(time_local):
-            """Helper to check if a specific time is astronomically dark."""
-            time_utc = time_local.astimezone(pytz.UTC)
-            return self._is_dark_sky([time_utc])[0]
-        
-        left, right = start_time, end_time
-        
-        # Check if transition actually exists in this window
-        left_dark = is_dark_at_time(left)
-        right_dark = is_dark_at_time(right)
-        
-        if looking_for_dark_start:
-            # Looking for light (False) -> dark (True) transition
-            if left_dark or not right_dark:
-                return None  # No valid transition in window
-        else:
-            # Looking for dark (True) -> light (False) transition  
-            if not left_dark or right_dark:
-                return None  # No valid transition in window
-        
-        # Binary search until we get 5-minute precision (good enough for midpoint calculation)
-        while (right - left).total_seconds() > 300:  # 5-minute precision (reduced from 1-minute)
-            mid = left + (right - left) / 2
-            mid_dark = is_dark_at_time(mid)
-            
-            if looking_for_dark_start:
-                # Looking for light -> dark transition
-                if mid_dark:
-                    right = mid  # Transition is before mid
-                else:
-                    left = mid   # Transition is after mid
-            else:
-                # Looking for dark -> light transition
-                if mid_dark:
-                    left = mid   # Transition is after mid
-                else:
-                    right = mid  # Transition is before mid
-        
-        # Return the transition point (when darkness changes)
-        return right if looking_for_dark_start else left
     
     # ============================================================================
     # NIGHT MIDPOINT CALCULATION
@@ -914,14 +689,10 @@ class StarTellerCLI:
     
     def get_night_midpoints(self, start_date=None, days=365):
         """
-        Get night midpoints for the specified period, using cache when available.
+        Get night midpoints for period, use cache when available.
         
-        Args:
-            start_date (date): Start date for calculation (default: today)
-            days (int): Number of days to calculate (default: 365)
-        
-        Returns:
-            list: List of (date, midpoint_datetime_local, dark_start_local, dark_end_local) tuples
+        Takes start date and *amount of days to calculate
+        Returns list of (date, midpoint_datetime_local, dark_start_local, dark_end_local) tuples
         """
         from datetime import date
         
@@ -930,7 +701,7 @@ class StarTellerCLI:
         
         end_date = start_date + timedelta(days=days-1)
         
-        # Check if we can use cached data
+        # Check for cached data
         years_needed = set()
         current_date = start_date
         for day_offset in range(days):
@@ -951,11 +722,11 @@ class StarTellerCLI:
             else:
                 missing_years.append(year)
         
-        # If we have all the data we need, return it
+        # If all needed data in cache, return it
         if not missing_years and len(all_cached_midpoints) >= days * 0.95:  # Allow 5% missing for edge cases
             return sorted(all_cached_midpoints, key=lambda x: x[0])
         
-        # Calculate missing years efficiently
+        # Else calculate missing years
         if missing_years:
             import time
             t_calc_start = time.perf_counter()
@@ -997,144 +768,16 @@ class StarTellerCLI:
         
         return sorted(result, key=lambda x: x[0])
     
-    def _calculate_night_midpoints(self, start_date, days, year=None):
-        """
-        Internal implementation: Calculate night midpoints using vectorized approach.
-        OPTIMIZED: Uses fast numpy sun position calculation - no ephemeris loading!
-        
-        Args:
-            start_date (date): Start date for calculation
-            days (int): Number of days to calculate
-            year (int): Year being calculated (for progress display)
-        """
-        from datetime import datetime, timedelta
-        
-        
-        # 81 samples per day (15:00 to 11:00 next day, every 15 min)
-        samples_per_day = 81
-        total_samples = days * samples_per_day
-        
-        # Build timestamp array efficiently
-        base_timestamps = np.zeros(total_samples, dtype=np.float64)
-        
-        for day_offset in range(days):
-            check_date = start_date + timedelta(days=day_offset)
-            afternoon = self.local_tz.localize(datetime.combine(check_date, datetime.min.time().replace(hour=15)))
-            base_ts = afternoon.timestamp()
-            
-            start_idx = day_offset * samples_per_day
-            for i in range(samples_per_day):
-                base_timestamps[start_idx + i] = base_ts + i * 900  # 900 seconds = 15 minutes
-        
-        # Convert all timestamps to Julian dates at once
-        jd_array = base_timestamps / 86400.0 + 2440587.5
-        
-        # FAST: Calculate sun altitude for ALL times at once using pure numpy
-        sun_altitudes = _calc_sun_altitude_fast(jd_array, self.latitude, self.longitude)
-        is_dark = sun_altitudes < -18.0
-        
-        # Find dark periods for each day
-        night_midpoints = []
-        
-        for day_offset in range(days):
-            check_date = start_date + timedelta(days=day_offset)
-            
-            # Get indices for this day's samples
-            start_idx = day_offset * samples_per_day
-            end_idx = start_idx + samples_per_day
-            
-            day_altitudes = sun_altitudes[start_idx:end_idx]
-            day_dark = is_dark[start_idx:end_idx]
-            day_timestamps = base_timestamps[start_idx:end_idx]
-            
-            # Find the dark period from coarse samples
-            dark_start_sample = None
-            dark_end_sample = None
-            
-            # Find first dark time (dark start)
-            for i in range(len(day_dark) - 1):
-                if not day_dark[i] and day_dark[i + 1]:
-                    dark_start_sample = i
-                    break
-            
-            # Find last dark time (dark end)
-            for i in range(len(day_dark) - 1, 0, -1):
-                if day_dark[i - 1] and not day_dark[i]:
-                    dark_end_sample = i
-                    break
-            
-            # Handle edge cases
-            if dark_start_sample is None:
-                if day_dark[0]:
-                    dark_start_sample = 0
-                else:
-                    continue
-            
-            if dark_end_sample is None:
-                if day_dark[-1]:
-                    dark_end_sample = len(day_dark) - 1
-                else:
-                    continue
-            
-            # Use linear interpolation to find precise transition times
-            # Interpolate dark start time
-            if dark_start_sample > 0:
-                ts0 = day_timestamps[dark_start_sample - 1]
-                ts1 = day_timestamps[dark_start_sample]
-                alt0 = day_altitudes[dark_start_sample - 1]
-                alt1 = day_altitudes[dark_start_sample]
-                
-                if alt0 != alt1:
-                    fraction = (-18.0 - alt0) / (alt1 - alt0)
-                    dark_start_ts = ts0 + (ts1 - ts0) * fraction
-                else:
-                    dark_start_ts = day_timestamps[dark_start_sample]
-            else:
-                dark_start_ts = day_timestamps[dark_start_sample]
-            
-            # Interpolate dark end time
-            if dark_end_sample < len(day_dark) - 1:
-                ts0 = day_timestamps[dark_end_sample]
-                ts1 = day_timestamps[dark_end_sample + 1]
-                alt0 = day_altitudes[dark_end_sample]
-                alt1 = day_altitudes[dark_end_sample + 1]
-                
-                if alt0 != alt1:
-                    fraction = (-18.0 - alt0) / (alt1 - alt0)
-                    dark_end_ts = ts0 + (ts1 - ts0) * fraction
-                else:
-                    dark_end_ts = day_timestamps[dark_end_sample]
-            else:
-                dark_end_ts = day_timestamps[dark_end_sample]
-            
-            # Calculate midpoint and convert timestamps to datetime objects
-            if dark_end_ts > dark_start_ts:
-                midpoint_ts = (dark_start_ts + dark_end_ts) / 2
-                
-                # Convert timestamps to timezone-aware datetime objects
-                dark_start = datetime.fromtimestamp(dark_start_ts, tz=self.local_tz)
-                dark_end = datetime.fromtimestamp(dark_end_ts, tz=self.local_tz)
-                midpoint = datetime.fromtimestamp(midpoint_ts, tz=self.local_tz)
-                
-                night_midpoints.append((check_date, midpoint, dark_start, dark_end))
-        
-        return night_midpoints
-    
     # ============================================================================
     # MAIN FUNCTIONALITY
     # ============================================================================
     
     def find_optimal_viewing_times(self, min_altitude=20, direction_filter=None):
         """
-        Find optimal viewing times for all objects in the catalog.
-        Uses multiprocessing with persistent workers for maximum CPU utilization.
+        Find optimal viewing times for all objects in the catalog
         
-        Args:
-            min_altitude (float): Minimum altitude in degrees (default: 20)
-            direction_filter (tuple): Optional (min_az, max_az) in degrees to filter by direction
-            
-        Returns:
-            pandas.DataFrame: Summary table with optimal viewing information
+        Takes *minimum altitude in degrees, *direction filter (tuple)
+        Returns pandas final result dataframe
         """
         print("Calculating optimal viewing times for deep sky objects...")
         print(f"Observer location: {self.latitude:.2f}°, {self.longitude:.2f}°")
@@ -1145,7 +788,7 @@ class StarTellerCLI:
         if direction_filter:
             print(f"Direction filter: {direction_filter[0]}° to {direction_filter[1]}° azimuth")
         
-        # Remove duplicates (prefer Messier names over NGC names)
+        # Remove duplicates (keep messier names over ngc ids)
         unique_objects = {}
         for obj_id, obj_data in self.dso_catalog.items():
             coord_key = (round(obj_data['ra'], 4), round(obj_data['dec'], 4))
@@ -1157,7 +800,7 @@ class StarTellerCLI:
                 if obj_id.startswith('M') and not existing_id.startswith('M'):
                     unique_objects[coord_key] = (obj_id, obj_data)
         
-        print(f"Processing {len(unique_objects)} unique objects (removed {len(self.dso_catalog) - len(unique_objects)} duplicates)")
+        print(f"Processing {len(unique_objects)} unique objects")
         
         import time
         t_total_start = time.perf_counter()
@@ -1224,21 +867,22 @@ class StarTellerCLI:
         if results_df.empty:
             return results_df
         
-        # Sort by maximum altitude (descending)
+        # Put never visible objects at bottom of list, 
+        # sort everything else by closest best date
         def sort_key(x):
-            if isinstance(x, str) or x == 'Never visible':
-                return -999
-            return x
-        
-        results_df['sort_altitude'] = results_df['Max_Altitude_deg'].apply(sort_key)
-        results_df = results_df.sort_values('sort_altitude', ascending=False)
-        results_df = results_df.drop('sort_altitude', axis=1)
+            return (isinstance(x, str) and (x == 'Never visible' or x == 'Error'))
+
+        results_df['never_visible'] = results_df['Max_Altitude_deg'].apply(sort_key)
+
+        results_df = results_df.sort_values(
+            by=['never_visible', 'Best_Date', 'Object'],
+            ascending=[True, True, True]
+        ).drop('never_visible', axis=1)
         
         return results_df
 
 
 def save_location(latitude, longitude, elevation):
-    """Save user location to a file."""
     try:
         user_data_dir = get_user_data_dir()
         user_data_dir.mkdir(parents=True, exist_ok=True)
@@ -1251,7 +895,6 @@ def save_location(latitude, longitude, elevation):
         print(f"Warning: Could not save location: {e}")
 
 def load_location():
-    """Load user location from file."""
     try:
         location_file = get_user_data_dir() / 'user_location.txt'
         if not location_file.exists():
@@ -1268,7 +911,6 @@ def load_location():
     return None
 
 def get_user_location():
-    """Get user location, either from saved file or manual entry."""
     saved_location = load_location()
     
     if saved_location:
@@ -1299,12 +941,10 @@ def main():
     print("        Deep Sky Object Optimal Viewing Calculator")
     print("=" * 60)
     
-    # === COLLECT ALL USER INPUT UPFRONT ===
+    # === Collect all User Input ===
     
-    # Get user location (saved or manual input)
     latitude, longitude, elevation = get_user_location()
     
-    # Choose catalog type
     print("\nChoose catalog:")
     print("1. Messier Objects (~110 famous deep sky objects)")
     print("2. IC Objects (~5,000 Index Catalog objects)")
@@ -1313,8 +953,6 @@ def main():
     
     catalog_choice = input("Enter choice (1-4, default 4): ").strip() or "4"
 
-    
-    # Get viewing preferences
     print("\nViewing preferences:")
     min_alt = float(input("Minimum altitude (degrees, default 20): ") or 20)
     
@@ -1327,11 +965,12 @@ def main():
         except:
             print("Invalid direction format, proceeding without direction filter.")
     
-    # === BEGIN PROCESSING ===
     print("\n" + "=" * 60)
     print("PROCESSING...")
     print("=" * 60)
     
+    # === User input collected, start processing ===
+
     # Create StarTellerCLI instance with appropriate catalog
     catalog_params = {
         "1": "messier",
@@ -1339,7 +978,6 @@ def main():
         "3": "ngc",
         "4": "all"
     }
-        
     catalog_type = catalog_params.get(catalog_choice)
     st = StarTellerCLI(latitude, longitude, elevation, catalog_filter=catalog_type)
     
@@ -1349,8 +987,6 @@ def main():
     
     # Calculate optimal viewing times
     results = st.find_optimal_viewing_times(min_altitude=min_alt, direction_filter=direction_filter)
-    
-    # === SAVE RESULTS ===
     
     # Save to output directory (created in current working directory)
     output_dir = get_output_dir()
@@ -1365,7 +1001,7 @@ def main():
     print(f"✓ Results saved to: {filename}")
     print(f"✓ Found optimal viewing times for {len(results)} objects")
     
-    # Show quick summary
+    # Print summary
     visible_count = len(results[results['Max_Altitude_deg'] != 'Never visible'])
     print(f"✓ {visible_count} objects visible above {min_alt}°")
     
