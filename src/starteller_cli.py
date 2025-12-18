@@ -988,8 +988,6 @@ def main():
     # Calculate optimal viewing times
     results = st.find_optimal_viewing_times(min_altitude=min_alt, direction_filter=direction_filter)
     
-    # === Save Results ===
-    
     # Save to output directory (created in current working directory)
     output_dir = get_output_dir()
     output_dir.mkdir(parents=True, exist_ok=True)
