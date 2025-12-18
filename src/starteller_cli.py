@@ -8,7 +8,6 @@ import os
 import pickle
 import hashlib
 import sys
-import warnings
 from datetime import datetime, timedelta
 from multiprocessing import Pool, cpu_count
 from pathlib import Path
@@ -23,8 +22,6 @@ try:
     from .catalog_manager import load_ngc_catalog
 except ImportError:
     from catalog_manager import load_ngc_catalog
-
-warnings.filterwarnings('ignore')
 
 # Process counts for parallel operations
 NUM_WORKERS = cpu_count() or 8
@@ -687,72 +684,6 @@ class StarTellerCLI:
             return None
     
     # ============================================================================
-    # ASTRONOMICAL UTILITIES
-    # ============================================================================
-    
-    def _is_dark_sky(self, times):
-        # Check if times are during astronomical darkness (sun below -18°).
-        # Takes list of datetimes, returns np boolean list
-
-        timestamps = np.array([t.timestamp() for t in times])
-        jd_array = timestamps / 86400.0 + 2440587.5
-        sun_altitudes = _calc_sun_altitude_fast(jd_array, self.latitude, self.longitude)
-        
-        return sun_altitudes < -18.0
-    
-    def _find_transition_time(self, start_time, end_time, looking_for_dark_start=True):
-        """
-        Find when sky goes from light to dark
-
-        Takes: start time, end time, bool looking_for_dark_start
-            If True, find light->dark transition, if false, find dark->light. 
-        Returns: transition datetime or None
-        """
-        # Early exit if window too small
-        if (end_time - start_time).total_seconds() < 120:
-            return None
-        
-        def is_dark_at_time(time_local):
-            time_utc = time_local.astimezone(pytz.UTC)
-            return self._is_dark_sky([time_utc])[0]
-        
-        left, right = start_time, end_time
-        
-        # Check if transition exists in time window
-        left_dark = is_dark_at_time(left)
-        right_dark = is_dark_at_time(right)
-        
-        if looking_for_dark_start:
-            # Looking for light (False) -> dark (True) transition
-            if left_dark or not right_dark:
-                return None
-        else:
-            # Looking for dark (True) -> light (False) transition  
-            if not left_dark or right_dark:
-                return None 
-        
-        # Binary search to 5-minute precision
-        while (right - left).total_seconds() > 300:
-            mid = left + (right - left) / 2
-            mid_dark = is_dark_at_time(mid)
-            
-            if looking_for_dark_start:
-                # Light -> dark transition
-                if mid_dark:
-                    right = mid  # Transition before mid
-                else:
-                    left = mid   # Transition after mid
-            else:
-                # Dark -> light transition
-                if mid_dark:
-                    left = mid   # Transition after mid
-                else:
-                    right = mid  # Transition before mid
-        
-        # Return transition point
-        return right if looking_for_dark_start else left
-    
-    # ============================================================================
     # NIGHT MIDPOINT CALCULATION
     # ============================================================================
     
@@ -1057,7 +988,7 @@ def main():
     # Calculate optimal viewing times
     results = st.find_optimal_viewing_times(min_altitude=min_alt, direction_filter=direction_filter)
     
-    # === SAVE RESULTS ===
+    # === Save Results ===
     
     # Save to output directory (created in current working directory)
     output_dir = get_output_dir()
