@@ -51,7 +51,6 @@ THIRD-PARTY DEPENDENCIES
 
 This software uses the following third-party libraries, each with their own licenses:
 
-- Skyfield: MIT License (https://github.com/skyfielders/python-skyfield)
 - Pandas: BSD 3-Clause License (https://github.com/pandas-dev/pandas)
 - NumPy: BSD 3-Clause License (https://github.com/numpy/numpy)
 - PyTZ: MIT License (https://github.com/stub42/pytz)
