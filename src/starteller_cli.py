@@ -98,7 +98,7 @@ def _calculate_lst(jd_array, longitude_deg):
     # Convert to radians
     return np.deg2rad(lst_deg)
 
-def _calc_alt_az_fast(ra_deg, dec_deg, lst_rad, lat_rad):
+def _calc_alt_az(ra_deg, dec_deg, lst_rad, lat_rad):
     """
     Calculate altitude and azimuth
     
@@ -177,7 +177,7 @@ def _process_object_worker(args):
     
     try:
         lat_rad = np.deg2rad(_worker_latitude)
-        alt_degrees, az_degrees = _calc_alt_az_fast(ra, dec, _worker_lst_array, lat_rad)
+        alt_degrees, az_degrees = _calc_alt_az(ra, dec, _worker_lst_array, lat_rad)
         above_altitude = alt_degrees >= min_altitude
         
         if direction_filter:
@@ -218,7 +218,7 @@ def _process_object_worker(args):
         jd_samples = sample_ts / 86400.0 + 2440587.5
         lst_samples = _calculate_lst(jd_samples, _worker_longitude)
         
-        sample_alt, sample_az = _calc_alt_az_fast(ra, dec, lst_samples, lat_rad)
+        sample_alt, sample_az = _calc_alt_az(ra, dec, lst_samples, lat_rad)
         
         # Apply direction filter if specified
         def meets_dir(az):
@@ -363,7 +363,7 @@ def _calc_sun_position(jd_array):
     
     return ra_deg, dec_deg
 
-def _calc_sun_altitude_fast(jd_array, latitude, longitude):
+def _calc_sun_altitude(jd_array, latitude, longitude):
     """
     Calculate sun altitude for an array of julian dates
 
@@ -378,7 +378,7 @@ def _calc_sun_altitude_fast(jd_array, latitude, longitude):
     
     # Calculate altitude
     lat_rad = np.deg2rad(latitude)
-    alt_deg, _ = _calc_alt_az_fast(sun_ra, sun_dec, lst_rad, lat_rad)
+    alt_deg, _ = _calc_alt_az(sun_ra, sun_dec, lst_rad, lat_rad)
     
     return alt_deg
 
@@ -432,7 +432,7 @@ def _calculate_year_midpoints_worker(args):
         jd_array = base_timestamps / 86400.0 + 2440587.5
         
         # Calculate sun altitude for all times at once
-        sun_altitudes = _calc_sun_altitude_fast(jd_array, latitude, longitude)
+        sun_altitudes = _calc_sun_altitude(jd_array, latitude, longitude)
         is_dark = sun_altitudes < -18.0
         
         # Find dark periods for each day
