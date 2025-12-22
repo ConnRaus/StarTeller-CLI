@@ -98,6 +98,48 @@ def _calculate_lst(jd_array, longitude_deg):
     # Convert to radians
     return np.deg2rad(lst_deg)
 
+def _precess_coordinates(ra_j2000_deg, dec_j2000_deg, jd_target):
+    """
+    Precess coordinates from J2000.0 epoch to target Julian date.
+
+    Chapter 21 of https://auass.com/wp-content/uploads/2021/01/Astronomical-Algorithms.pdf
+    
+    Takes: Right Ascension and Declination in J2000 degrees, Target Julian Date
+    Returns: New RA and Dec in degrees
+    """
+    # Julian centuries from J2000.0
+    t = (jd_target - 2451545.0) / 36525.0
+    
+    # Accurate to within a few arcseconds for dates within ~100 years of J2000.0
+    zeta = 2306.2181*t + 0.30188*t**2 - 0.017998*t**3
+    z = 2306.2181*t + 1.09468*t**2 + 0.018203*t**3
+    theta = 2004.3109*t-0.42665*t**2 - 0.041833*t**3
+    
+    # Convert to radians
+    zeta_rad = np.deg2rad(zeta / 3600.0)
+    z_rad = np.deg2rad(z / 3600.0)
+    theta_rad = np.deg2rad(theta / 3600.0)
+    
+    ra_rad = np.deg2rad(ra_j2000_deg)
+    dec_rad = np.deg2rad(dec_j2000_deg)
+    
+    # Precession formulas
+    A = np.cos(dec_rad) * np.sin(ra_rad + zeta_rad)
+    B = np.cos(theta_rad) * np.cos(dec_rad) * np.cos(ra_rad + zeta_rad) - np.sin(theta_rad) * np.sin(dec_rad)
+    C = np.sin(theta_rad) * np.cos(dec_rad) * np.cos(ra_rad + zeta_rad) + np.cos(theta_rad) * np.sin(dec_rad)
+    
+    # New declination
+    dec_new_rad = np.arcsin(np.clip(C, -1.0, 1.0))
+    
+    # New right ascension
+    ra_new_rad = np.arctan2(A, B) + z_rad
+    
+    # Convert back to degrees
+    ra_new_deg = np.rad2deg(ra_new_rad) % 360.0
+    dec_new_deg = np.rad2deg(dec_new_rad)
+    
+    return ra_new_deg, dec_new_deg
+
 def _calc_alt_az(ra_deg, dec_deg, lst_rad, lat_rad):
     """
     Calculate altitude and azimuth
@@ -193,7 +235,7 @@ def _process_object_worker(args):
         total_good_nights = int(np.sum(valid_mask))
         
         if total_good_nights == 0:
-            return (obj_id, name, obj_type, 'N/A', 'N/A', 'Never visible', 'N/A', 
+            return (obj_id, name, obj_type, ra, dec,'N/A', 'N/A', 'Never visible', 'N/A', 
                     'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 0, 0, 0, 'N/A', 'N/A')
         
         # Find best night
@@ -319,14 +361,14 @@ def _process_object_worker(args):
                 set_dir = _azimuth_to_cardinal(best_azimuth)
                 duration = round(np.sum(visible) / num_samples * dark_duration_hours, 1)
         
-        return (obj_id, name, obj_type, best_date, best_midpoint.strftime('%H:%M'),
+        return (obj_id, name, obj_type, ra, dec, best_date, best_midpoint.strftime('%H:%M'),
                 best_altitude, best_azimuth, _azimuth_to_cardinal(best_azimuth),
                 rise_time, rise_dir, set_time, set_dir, duration,
                 total_good_nights, total_good_nights,
                 best_dark_start.strftime('%H:%M'), best_dark_end.strftime('%H:%M'))
         
     except Exception as e:
-        return (obj_id, name, obj_type, 'N/A', 'N/A', 'Error', 'N/A', 
+        return (obj_id, name, obj_type, ra, dec, 'N/A', 'N/A', 'Error', 'N/A', 
                 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 0, 0, 0, 'N/A', 'N/A')
 
 def _calc_sun_position(jd_array):
@@ -788,7 +830,7 @@ class StarTellerCLI:
         if direction_filter:
             print(f"Direction filter: {direction_filter[0]}° to {direction_filter[1]}° azimuth")
         
-        # Remove duplicates (keep messier names over ngc ids)
+        # Remove duplicates (keep messier names over ngc ids and other catalogs)
         unique_objects = {}
         for obj_id, obj_data in self.dso_catalog.items():
             coord_key = (round(obj_data['ra'], 4), round(obj_data['dec'], 4))
@@ -797,7 +839,11 @@ class StarTellerCLI:
                 unique_objects[coord_key] = (obj_id, obj_data)
             else:
                 existing_id, existing_data = unique_objects[coord_key]
+                # Prefer Messier objects (M45) over Melotte (Mel022) and other catalogs
                 if obj_id.startswith('M') and not existing_id.startswith('M'):
+                    unique_objects[coord_key] = (obj_id, obj_data)
+                # Also prefer Messier over Melotte even if Melotte was added first
+                elif obj_id.startswith('M') and existing_id.startswith('Mel'):
                     unique_objects[coord_key] = (obj_id, obj_data)
         
         print(f"Processing {len(unique_objects)} unique objects")
@@ -829,15 +875,39 @@ class StarTellerCLI:
         items = list(unique_objects.values())
         local_tz_str = str(self.local_tz)
         
-        # Prepare work items
-        work_items = [
-            (obj_id, obj_data['ra'], obj_data['dec'], obj_data['name'], obj_data['type'],
-             min_altitude, direction_filter)
-            for obj_id, obj_data in items
-        ]
+        # Calculate mean epoch for precession (middle of calculation period)
+        # Use the middle date of the night midpoints for the target epoch
+        if night_midpoints:
+            mid_idx = len(night_midpoints) // 2
+            mid_date, mid_midpoint, _, _ = night_midpoints[mid_idx]
+            # Convert to Julian date for precession
+            mid_jd = mid_midpoint.timestamp() / 86400.0 + 2440587.5
+            epoch_date_str = mid_midpoint.strftime('%Y-%m-%d')
+        else:
+            # Fallback to current date
+            from datetime import date
+            today = date.today()
+            mid_jd = (datetime(today.year, 7, 1, 12, 0, 0, tzinfo=pytz.UTC).timestamp() / 86400.0 + 2440587.5)
+            epoch_date_str = f"{today.year}-07-01"
+        
+        # Precess coordinates from J2000.0 to current epoch
+        # NGC.csv provides coordinates in J2000.0 epoch, but we need current epoch for accurate calculations
+        print(f"Precessing coordinates from J2000.0 to epoch {epoch_date_str} (accounting for Earth's precession)...")
+        
+        # Prepare work items with precessed coordinates
+        work_items = []
+        for obj_id, obj_data in items:
+            ra_j2000 = obj_data['ra']
+            dec_j2000 = obj_data['dec']
+            # Precess from J2000.0 to current epoch
+            ra_current, dec_current = _precess_coordinates(ra_j2000, dec_j2000, mid_jd)
+            work_items.append(
+                (obj_id, ra_current, dec_current, obj_data['name'], obj_data['type'],
+                 min_altitude, direction_filter)
+            )
         
         results = []
-        columns = ['Object', 'Name', 'Type', 'Best_Date', 'Best_Time_Local',
+        columns = ['Object', 'Name', 'Type', 'Right_Ascension', 'Declination', 'Best_Date', 'Best_Time_Local',
                    'Max_Altitude_deg', 'Azimuth_deg', 'Direction',
                    'Rise_Time_Local', 'Rise_Direction', 'Set_Time_Local', 'Set_Direction',
                    'Observing_Duration_Hours', 'Dark_Nights_Per_Year', 'Good_Viewing_Periods',
