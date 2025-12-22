@@ -55,6 +55,8 @@ Results go to `starteller_output/` in your current directory. The CSV includes:
 | Object                   | NGC/IC/Messier ID                           |
 | Name                     | Common name if available                    |
 | Type                     | Galaxy, Nebula, Cluster, etc.               |
+| RA                       | Right Ascension in degrees                  |
+| Dec                      | Declination in degrees                      |
 | Best_Date                | Date when object is highest at midnight     |
 | Best_Time_Local          | Time of peak altitude                       |
 | Max_Altitude_deg         | Maximum altitude reached                    |
