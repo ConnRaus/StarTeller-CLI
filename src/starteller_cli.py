@@ -213,7 +213,7 @@ def _process_object_worker(args):
     global _worker_local_tz, _worker_local_tz_str
     
     # Only receive minimal object data
-    obj_id, ra, dec, name, obj_type, min_altitude, direction_filter = args
+    obj_id, ra, dec, name, obj_type, messier_num, min_altitude, direction_filter = args
     
     import numpy as np
     
@@ -235,7 +235,7 @@ def _process_object_worker(args):
         total_good_nights = int(np.sum(valid_mask))
         
         if total_good_nights == 0:
-            return (obj_id, name, obj_type, ra, dec,'N/A', 'N/A', 'Never visible', 'N/A', 
+            return (obj_id, name, obj_type, messier_num, ra, dec,'N/A', 'N/A', 'Never visible', 'N/A', 
                     'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 0, 0, 0, 'N/A', 'N/A')
         
         # Find best night
@@ -361,14 +361,14 @@ def _process_object_worker(args):
                 set_dir = _azimuth_to_cardinal(best_azimuth)
                 duration = round(np.sum(visible) / num_samples * dark_duration_hours, 1)
         
-        return (obj_id, name, obj_type, ra, dec, best_date, best_midpoint.strftime('%H:%M'),
+        return (obj_id, name, obj_type, messier_num, ra, dec, best_date, best_midpoint.strftime('%H:%M'),
                 best_altitude, best_azimuth, _azimuth_to_cardinal(best_azimuth),
                 rise_time, rise_dir, set_time, set_dir, duration,
                 total_good_nights, total_good_nights,
                 best_dark_start.strftime('%H:%M'), best_dark_end.strftime('%H:%M'))
         
     except Exception as e:
-        return (obj_id, name, obj_type, ra, dec, 'N/A', 'N/A', 'Error', 'N/A', 
+        return (obj_id, name, obj_type, messier_num, ra, dec, 'N/A', 'N/A', 'Error', 'N/A', 
                 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 0, 0, 0, 'N/A', 'N/A')
 
 def _calc_sun_position(jd_array):
@@ -655,11 +655,28 @@ class StarTellerCLI:
                 # Use common name if available, otherwise use name
                 display_name = row.get('common_name', '') or row['name']
                 
+                # Extract Messier number if available
+                messier_num = ''
+                if obj_id.startswith('M'):
+                    # This is a Messier object, extract the number
+                    try:
+                        messier_num = obj_id  # Already in format "M42"
+                    except:
+                        pass
+                elif row.get('messier') and str(row['messier']).strip():
+                    # This object has a Messier designation
+                    try:
+                        messier_num_int = int(float(str(row['messier']).strip()))
+                        messier_num = f"M{messier_num_int}"
+                    except (ValueError, TypeError):
+                        pass
+                
                 catalog_dict[obj_id] = {
                     'ra': float(row['ra_deg']),
                     'dec': float(row['dec_deg']),
                     'name': display_name,
-                    'type': row['type']
+                    'type': row['type'],
+                    'messier': messier_num
                 }
             
             print(f"✓ Catalog: {len(catalog_dict)} {filter_names.get(catalog_filter, 'objects')}")
@@ -830,7 +847,7 @@ class StarTellerCLI:
         if direction_filter:
             print(f"Direction filter: {direction_filter[0]}° to {direction_filter[1]}° azimuth")
         
-        # Remove duplicates (keep messier names over ngc ids and other catalogs)
+        # Remove duplicates (prefer NGC/IC objects, merge Messier numbers)
         unique_objects = {}
         for obj_id, obj_data in self.dso_catalog.items():
             coord_key = (round(obj_data['ra'], 4), round(obj_data['dec'], 4))
@@ -839,8 +856,20 @@ class StarTellerCLI:
                 unique_objects[coord_key] = (obj_id, obj_data)
             else:
                 existing_id, existing_data = unique_objects[coord_key]
-                # Prefer Messier objects (M45) over Melotte (Mel022) and other catalogs
-                if obj_id.startswith('M') and not existing_id.startswith('M'):
+                # Prefer NGC/IC objects over Messier objects (so we keep NGC number)
+                if (obj_id.startswith('NGC') or obj_id.startswith('IC')) and existing_id.startswith('M'):
+                    # Replace Messier entry with NGC/IC, but preserve Messier number if not already set
+                    if not existing_data.get('messier', ''):
+                        obj_data['messier'] = existing_id  # Use the Messier object_id as the Messier number
+                    unique_objects[coord_key] = (obj_id, obj_data)
+                # If existing is NGC/IC and new is Messier, merge Messier number
+                elif obj_id.startswith('M') and (existing_id.startswith('NGC') or existing_id.startswith('IC')):
+                    # Keep existing NGC/IC, but add Messier number if not already set
+                    if not existing_data.get('messier', ''):
+                        existing_data['messier'] = obj_id
+                    unique_objects[coord_key] = (existing_id, existing_data)
+                # Prefer Messier objects over other catalogs (Melotte, etc.)
+                elif obj_id.startswith('M') and not existing_id.startswith('M') and not (existing_id.startswith('NGC') or existing_id.startswith('IC')):
                     unique_objects[coord_key] = (obj_id, obj_data)
                 # Also prefer Messier over Melotte even if Melotte was added first
                 elif obj_id.startswith('M') and existing_id.startswith('Mel'):
@@ -903,11 +932,11 @@ class StarTellerCLI:
             ra_current, dec_current = _precess_coordinates(ra_j2000, dec_j2000, mid_jd)
             work_items.append(
                 (obj_id, ra_current, dec_current, obj_data['name'], obj_data['type'],
-                 min_altitude, direction_filter)
+                 obj_data.get('messier', ''), min_altitude, direction_filter)
             )
         
         results = []
-        columns = ['Object', 'Name', 'Type', 'Right_Ascension', 'Declination', 'Best_Date', 'Best_Time_Local',
+        columns = ['Object', 'Name', 'Type', 'Messier', 'Right_Ascension', 'Declination', 'Best_Date', 'Best_Time_Local',
                    'Max_Altitude_deg', 'Azimuth_deg', 'Direction',
                    'Rise_Time_Local', 'Rise_Direction', 'Set_Time_Local', 'Set_Direction',
                    'Observing_Duration_Hours', 'Dark_Nights_Per_Year', 'Good_Viewing_Periods',
