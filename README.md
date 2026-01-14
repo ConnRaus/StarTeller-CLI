@@ -128,6 +128,6 @@ Catalog data comes from [OpenNGC](https://github.com/mattiaverga/OpenNGC) by Mat
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+CC-BY-NC-SA-4.0 (Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International). See [LICENSE](LICENSE).
 
 The NGC catalog data is CC-BY-SA-4.0.

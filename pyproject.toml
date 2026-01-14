@@ -7,7 +7,7 @@ name = "starteller-cli"
 version = "1.0.2"
 description = "A command-line tool for astrophotographers to find optimal viewing times for deep sky objects"
 readme = "README.md"
-license = {text = "MIT"}
+license = {text = "CC-BY-NC-SA-4.0"}
 authors = [
     {name = "ConnRaus"}
 ]
@@ -15,7 +15,7 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Astronomy",
-    "License :: OSI Approved :: MIT License",
+    "License :: Creative Commons :: Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
