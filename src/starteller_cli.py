@@ -213,13 +213,14 @@ def _process_object_worker(args):
     global _worker_local_tz, _worker_local_tz_str
     
     # Only receive minimal object data
-    obj_id, ra, dec, name, obj_type, messier_num, min_altitude, direction_filter = args
+    # ra_j2000/dec_j2000 for output, ra_now/dec_now for calculations
+    obj_id, ra_j2000, dec_j2000, ra_now, dec_now, name, obj_type, messier_num, min_altitude, direction_filter = args
     
     import numpy as np
     
     try:
         lat_rad = np.deg2rad(_worker_latitude)
-        alt_degrees, az_degrees = _calc_alt_az(ra, dec, _worker_lst_array, lat_rad)
+        alt_degrees, az_degrees = _calc_alt_az(ra_now, dec_now, _worker_lst_array, lat_rad)
         above_altitude = alt_degrees >= min_altitude
         
         if direction_filter:
@@ -235,7 +236,7 @@ def _process_object_worker(args):
         total_good_nights = int(np.sum(valid_mask))
         
         if total_good_nights == 0:
-            return (obj_id, name, obj_type, messier_num, ra, dec,'N/A', 'N/A', 'Never visible', 'N/A', 
+            return (obj_id, name, obj_type, messier_num, ra_j2000, dec_j2000, 'N/A', 'N/A', 'Never visible', 'N/A', 
                     'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 0, 0, 0, 'N/A', 'N/A')
         
         # Find best night
@@ -260,7 +261,7 @@ def _process_object_worker(args):
         jd_samples = sample_ts / 86400.0 + 2440587.5
         lst_samples = _calculate_lst(jd_samples, _worker_longitude)
         
-        sample_alt, sample_az = _calc_alt_az(ra, dec, lst_samples, lat_rad)
+        sample_alt, sample_az = _calc_alt_az(ra_now, dec_now, lst_samples, lat_rad)
         
         # Apply direction filter if specified
         def meets_dir(az):
@@ -361,14 +362,14 @@ def _process_object_worker(args):
                 set_dir = _azimuth_to_cardinal(best_azimuth)
                 duration = round(np.sum(visible) / num_samples * dark_duration_hours, 1)
         
-        return (obj_id, name, obj_type, messier_num, ra, dec, best_date, best_midpoint.strftime('%H:%M'),
+        return (obj_id, name, obj_type, messier_num, ra_j2000, dec_j2000, best_date, best_midpoint.strftime('%H:%M'),
                 best_altitude, best_azimuth, _azimuth_to_cardinal(best_azimuth),
                 rise_time, rise_dir, set_time, set_dir, duration,
                 total_good_nights, total_good_nights,
                 best_dark_start.strftime('%H:%M'), best_dark_end.strftime('%H:%M'))
         
     except Exception as e:
-        return (obj_id, name, obj_type, messier_num, ra, dec, 'N/A', 'N/A', 'Error', 'N/A', 
+        return (obj_id, name, obj_type, messier_num, ra_j2000, dec_j2000, 'N/A', 'N/A', 'Error', 'N/A', 
                 'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 0, 0, 0, 'N/A', 'N/A')
 
 def _calc_sun_position(jd_array):
@@ -596,10 +597,10 @@ class StarTellerCLI:
     # CONSTRUCTOR AND SETUP
     # ============================================================================
     
-    def __init__(self, latitude, longitude, elevation=0, catalog_filter="all"):
+    def __init__(self, latitude, longitude, elevation=0):
         """
         Initialize StarTellerCLI with observer location.      
-        Args: lat(float), long(float), *elevation(m), *catalog filter(string)
+        Args: lat(float), long(float), *elevation(m)
         """
         self.latitude = latitude
         self.longitude = longitude
@@ -619,7 +620,7 @@ class StarTellerCLI:
             print("✓ Timezone: UTC (could not auto-detect)")
         
         # Load catalog
-        self.dso_catalog = self._setup_catalog(catalog_filter)
+        self.dso_catalog = self._setup_catalog()
     
     def _generate_location_hash(self):
         """Generate a unique hash for this location for caching purposes."""
@@ -629,18 +630,11 @@ class StarTellerCLI:
         location_string = f"{lat_rounded},{lon_rounded}"
         return hashlib.md5(location_string.encode()).hexdigest()[:8]
     
-    def _setup_catalog(self, catalog_filter):
-        # Takes catalog filter, returns catalog dictionary
-        filter_names = {
-            "messier": "Messier Objects",
-            "ic": "IC Objects", 
-            "ngc": "NGC Objects",
-            "all": "All Objects"
-        }
-        
+    def _setup_catalog(self):
+        # Returns catalog dictionary
         try:
-            # Load NGC catalog with filter
-            catalog_df = load_ngc_catalog(catalog_filter=catalog_filter)
+            # Load NGC catalog
+            catalog_df = load_ngc_catalog()
             
             if catalog_df.empty:
                 print("Failed to load NGC catalog - please ensure NGC.csv file is present")
@@ -655,31 +649,15 @@ class StarTellerCLI:
                 # Use common name if available, otherwise use name
                 display_name = row.get('common_name', '') or row['name']
                 
-                # Extract Messier number if available
-                messier_num = ''
-                if obj_id.startswith('M'):
-                    # This is a Messier object, extract the number
-                    try:
-                        messier_num = obj_id  # Already in format "M42"
-                    except:
-                        pass
-                elif row.get('messier') and str(row['messier']).strip():
-                    # This object has a Messier designation
-                    try:
-                        messier_num_int = int(float(str(row['messier']).strip()))
-                        messier_num = f"M{messier_num_int}"
-                    except (ValueError, TypeError):
-                        pass
-                
                 catalog_dict[obj_id] = {
                     'ra': float(row['ra_deg']),
                     'dec': float(row['dec_deg']),
                     'name': display_name,
                     'type': row['type'],
-                    'messier': messier_num
+                    'messier': row.get('messier', '')
                 }
             
-            print(f"✓ Catalog: {len(catalog_dict)} {filter_names.get(catalog_filter, 'objects')}")
+            print(f"✓ Catalog: {len(catalog_dict)} objects loaded")
             return catalog_dict
             
         except Exception as e:
@@ -847,7 +825,7 @@ class StarTellerCLI:
         if direction_filter:
             print(f"Direction filter: {direction_filter[0]}° to {direction_filter[1]}° azimuth")
         
-        # Remove duplicates (prefer NGC/IC objects, merge Messier numbers)
+        # Remove coordinate duplicates (prefer NGC/IC objects over addendum catalogs)
         unique_objects = {}
         for obj_id, obj_data in self.dso_catalog.items():
             coord_key = (round(obj_data['ra'], 4), round(obj_data['dec'], 4))
@@ -855,24 +833,9 @@ class StarTellerCLI:
             if coord_key not in unique_objects:
                 unique_objects[coord_key] = (obj_id, obj_data)
             else:
-                existing_id, existing_data = unique_objects[coord_key]
-                # Prefer NGC/IC objects over Messier objects (so we keep NGC number)
-                if (obj_id.startswith('NGC') or obj_id.startswith('IC')) and existing_id.startswith('M'):
-                    # Replace Messier entry with NGC/IC, but preserve Messier number if not already set
-                    if not existing_data.get('messier', ''):
-                        obj_data['messier'] = existing_id  # Use the Messier object_id as the Messier number
-                    unique_objects[coord_key] = (obj_id, obj_data)
-                # If existing is NGC/IC and new is Messier, merge Messier number
-                elif obj_id.startswith('M') and (existing_id.startswith('NGC') or existing_id.startswith('IC')):
-                    # Keep existing NGC/IC, but add Messier number if not already set
-                    if not existing_data.get('messier', ''):
-                        existing_data['messier'] = obj_id
-                    unique_objects[coord_key] = (existing_id, existing_data)
-                # Prefer Messier objects over other catalogs (Melotte, etc.)
-                elif obj_id.startswith('M') and not existing_id.startswith('M') and not (existing_id.startswith('NGC') or existing_id.startswith('IC')):
-                    unique_objects[coord_key] = (obj_id, obj_data)
-                # Also prefer Messier over Melotte even if Melotte was added first
-                elif obj_id.startswith('M') and existing_id.startswith('Mel'):
+                existing_id, _ = unique_objects[coord_key]
+                # Prefer NGC/IC objects over other catalogs
+                if (obj_id.startswith('NGC') or obj_id.startswith('IC')) and not (existing_id.startswith('NGC') or existing_id.startswith('IC')):
                     unique_objects[coord_key] = (obj_id, obj_data)
         
         print(f"Processing {len(unique_objects)} unique objects")
@@ -923,15 +886,15 @@ class StarTellerCLI:
         # NGC.csv provides coordinates in J2000.0 epoch, but we need current epoch for accurate calculations
         print(f"Precessing coordinates from J2000.0 to epoch {epoch_date_str} (accounting for Earth's precession)...")
         
-        # Prepare work items with precessed coordinates
+        # Prepare work items with both J2000 (for output) and precessed coordinates (for calculations)
         work_items = []
         for obj_id, obj_data in items:
             ra_j2000 = obj_data['ra']
             dec_j2000 = obj_data['dec']
-            # Precess from J2000.0 to current epoch
-            ra_current, dec_current = _precess_coordinates(ra_j2000, dec_j2000, mid_jd)
+            # Precess from J2000.0 to current epoch for accurate calculations
+            ra_now, dec_now = _precess_coordinates(ra_j2000, dec_j2000, mid_jd)
             work_items.append(
-                (obj_id, ra_current, dec_current, obj_data['name'], obj_data['type'],
+                (obj_id, ra_j2000, dec_j2000, ra_now, dec_now, obj_data['name'], obj_data['type'],
                  obj_data.get('messier', ''), min_altitude, direction_filter)
             )
         
@@ -1043,14 +1006,6 @@ def main():
     # === Collect all User Input ===
     
     latitude, longitude, elevation = get_user_location()
-    
-    print("\nChoose catalog:")
-    print("1. Messier Objects (~110 famous deep sky objects)")
-    print("2. IC Objects (~5,000 Index Catalog objects)")
-    print("3. NGC Objects (~8,000 New General Catalog objects)")
-    print("4. All Objects (~13,000 NGC + IC objects)")
-    
-    catalog_choice = input("Enter choice (1-4, default 4): ").strip() or "4"
 
     print("\nViewing preferences:")
     min_alt = float(input("Minimum altitude (degrees, default 20): ") or 20)
@@ -1071,14 +1026,7 @@ def main():
     # === User input collected, start processing ===
 
     # Create StarTellerCLI instance with appropriate catalog
-    catalog_params = {
-        "1": "messier",
-        "2": "ic",
-        "3": "ngc",
-        "4": "all"
-    }
-    catalog_type = catalog_params.get(catalog_choice)
-    st = StarTellerCLI(latitude, longitude, elevation, catalog_filter=catalog_type)
+    st = StarTellerCLI(latitude, longitude, elevation)
     
     if st is None:
         print("Failed to create StarTellerCLI instance. Exiting.")

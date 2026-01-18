@@ -9,7 +9,7 @@ import os
 import tempfile
 import shutil
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from pathlib import Path
 import pandas as pd
 import pickle
@@ -18,7 +18,7 @@ from datetime import datetime, date
 # Add src directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from starteller_cli import StarTellerCLI, get_user_location
+from starteller_cli import StarTellerCLI
 try:
     from src.catalog_manager import load_ngc_catalog, download_ngc_catalog
 except ImportError:
@@ -87,61 +87,32 @@ class TestStarTellerCLIDownload(unittest.TestCase):
 
 
 class TestStarTellerCLICatalog(unittest.TestCase):
-    """Test catalog loading and filtering functionality."""
+    """Test catalog loading functionality."""
     
-    def setUp(self):
-        """Create mock catalog data for testing."""
-        self.test_data_dir = tempfile.mkdtemp()
-        self.mock_ngc_data = """Name;Type;RA;Dec;Const;MajAx;MinAx;PosAng;B-Mag;V-Mag;J-Mag;H-Mag;K-Mag;SurfBr;Hubble;Pax;Pm-RA;Pm-Dec;RadVel;Redshift;Cstar U-Mag;Cstar B-Mag;Cstar V-Mag;M;NGC;IC;Cstar Names;Identifiers;Common names;NED notes;OpenNGC notes;Sources
-NGC0001;G;00:07:15.84;+27:42:29.0;And;1.57;1.07;112;13.65;;10.47;9.73;9.38;23.13;Sb;;;;4536;0.015270;;;;;;;;2MASX J00071582+2742290,IRAS 00047+2725,MCG +05-01-027,PGC 000564,UGC 00057;;;;
-NGC0002;G;00:07:17.28;+27:40:50.4;And;2.49;1.86;130;14.20;;10.83;10.07;9.71;24.44;Sb;;;;4546;0.015301;;;;;;;;2MASX J00071728+2740504,IRAS 00048+2724,MCG +05-01-028,PGC 000565;;;;
-IC0001;**;00:08:27.05;+27:43:03.6;Peg;;;;;;;;;;;;;;;;;;;;;;;;;;;
-NGC1952;SNR;05:34:31.94;+22:00:52.2;Tau;6.00;4.00;125;8.40;;;;;;;;;;;;;;1;;;;;Crab Nebula;;;;
-NGC0224;G;00:42:44.31;+41:16:09.4;And;190.0;61.7;35;4.36;;;;;;;;;;;;;;31;;;;;Andromeda Galaxy;;;;
-NGC0221;G;00:42:41.83;+40:51:54.6;And;8.5;6.5;168;8.08;;;;;;;;;;;;;;32;;;;;NGC 221;;;;"""
+    def test_catalog_loading(self):
+        """Test that the catalog loads successfully."""
+        catalog = load_ngc_catalog()
         
-        self.ngc_path = os.path.join(self.test_data_dir, 'NGC.csv')
-        with open(self.ngc_path, 'w') as f:
-            f.write(self.mock_ngc_data)
-    
-    def tearDown(self):
-        """Clean up test directories."""
-        if os.path.exists(self.test_data_dir):
-            shutil.rmtree(self.test_data_dir)
-    
-    def test_messier_filter(self):
-        """Test Messier catalog filtering."""
-        # Test that Messier filtering works with the real catalog
-        catalog = load_ngc_catalog(catalog_filter="messier")
-        
-        # Should either have Messier objects or be empty
-        if not catalog.empty:
-            # If we have objects, some should have Messier designations
-            messier_objects = catalog[catalog['messier'].notna() & (catalog['messier'] != '')]
-            self.assertGreaterEqual(len(messier_objects), 0)
-        
-        # Test should pass regardless - just verify it doesn't crash
+        # Should load a non-empty catalog
         self.assertIsInstance(catalog, pd.DataFrame)
-    
-    def test_ngc_filter(self):
-        """Test NGC catalog filtering."""
-        # Simple test - just verify NGC filtering works with real data
-        catalog = load_ngc_catalog(catalog_filter="ngc")
+        self.assertGreater(len(catalog), 0)
         
-        if not catalog.empty:
-            ngc_objects = catalog[catalog['object_id'].str.startswith('NGC')]
-            # Should have some NGC objects if catalog is not empty
-            self.assertGreaterEqual(len(ngc_objects), 0)
+        # Should have required columns
+        required_columns = ['object_id', 'name', 'ra_deg', 'dec_deg', 'type', 'messier']
+        for col in required_columns:
+            self.assertIn(col, catalog.columns)
     
-    def test_ic_filter(self):
-        """Test IC catalog filtering.""" 
-        # Simple test - just verify IC filtering works with real data
-        catalog = load_ngc_catalog(catalog_filter="ic")
+    def test_messier_field_format(self):
+        """Test that Messier field is formatted correctly."""
+        catalog = load_ngc_catalog()
         
-        if not catalog.empty:
-            ic_objects = catalog[catalog['object_id'].str.startswith('IC')]
-            # Should have some IC objects if catalog is not empty
-            self.assertGreaterEqual(len(ic_objects), 0)
+        # Find objects with Messier designations
+        messier_objects = catalog[catalog['messier'].notna() & (catalog['messier'] != '')]
+        
+        if not messier_objects.empty:
+            # Messier field should be formatted like "M31", "M42", etc.
+            for m_val in messier_objects['messier'].head(10):
+                self.assertTrue(m_val.startswith('M'), f"Messier value '{m_val}' should start with 'M'")
 
 
 class TestStarTellerCLICaching(unittest.TestCase):
@@ -150,7 +121,7 @@ class TestStarTellerCLICaching(unittest.TestCase):
     def setUp(self):
         """Set up test environment."""
         self.test_cache_dir = tempfile.mkdtemp()
-        self.st = StarTellerCLI(40.7, -74.0, elevation=50, catalog_filter="messier")
+        self.st = StarTellerCLI(40.7, -74.0, elevation=50)
         # Override cache directory for testing
         self.original_get_cache_filepath = self.st._get_cache_filepath
         
@@ -230,7 +201,7 @@ class TestStarTellerCLIFunctionality(unittest.TestCase):
     def setUp(self):
         """Set up test StarTellerCLI instance."""
         self.test_cache_dir = tempfile.mkdtemp()
-        self.st = StarTellerCLI(40.7, -74.0, elevation=50, catalog_filter="messier")
+        self.st = StarTellerCLI(40.7, -74.0, elevation=50)
         
         # Override cache directory for testing
         self.original_get_cache_filepath = self.st._get_cache_filepath
@@ -328,31 +299,6 @@ class TestStarTellerCLIFunctionality(unittest.TestCase):
         self.assertIsInstance(results_high, pd.DataFrame)
 
 
-class TestStarTellerCLICustomObjects(unittest.TestCase):
-    """Test custom object functionality."""
-    
-    def setUp(self):
-        """Set up test environment."""
-        self.test_cache_dir = tempfile.mkdtemp()
-    
-    def tearDown(self):
-        """Clean up test directories."""
-        if os.path.exists(self.test_cache_dir):
-            shutil.rmtree(self.test_cache_dir)
-    
-    def _mock_cache_dir(self, st):
-        """Mock cache directory for a StarTellerCLI instance."""
-        original_get_cache_filepath = st._get_cache_filepath
-        
-        def mock_get_cache_filepath(year=None):
-            if year is None:
-                year = datetime.now().year
-            return Path(self.test_cache_dir) / f"night_midpoints_test_{year}.pkl"
-        
-        st._get_cache_filepath = mock_get_cache_filepath
-        return original_get_cache_filepath
-
-
 class TestStarTellerCLIErrorHandling(unittest.TestCase):
     """Test error handling and edge cases."""
     
@@ -389,20 +335,18 @@ class TestStarTellerCLIErrorHandling(unittest.TestCase):
             # Some level of graceful degradation is acceptable
             pass
     
-    def test_empty_catalog(self):
-        """Test handling of empty catalog."""
-        # Create a StarTellerCLI with very restrictive filters to get minimal objects
-        st = StarTellerCLI(40.7, -74.0, elevation=50, catalog_filter="ic")
+    def test_large_catalog(self):
+        """Test handling of full catalog."""
+        st = StarTellerCLI(40.7, -74.0, elevation=50)
         self._mock_cache_dir(st)
         
-        # Should handle small/empty catalog gracefully
+        # Should handle full catalog gracefully
         try:
             results = st.find_optimal_viewing_times()
             self.assertIsInstance(results, pd.DataFrame)
-            # Results should be a valid DataFrame, even if empty
+            self.assertGreater(len(results), 0)
         except Exception as e:
-            # If there's an error, it should be graceful, not a crash
-            self.fail(f"Empty catalog handling should be graceful, but got: {e}")
+            self.fail(f"Catalog handling should be graceful, but got: {e}")
     
     def test_corrupted_cache(self):
         """Test handling of corrupted cache files."""
@@ -437,7 +381,6 @@ def run_comprehensive_test():
         TestStarTellerCLICatalog, 
         TestStarTellerCLICaching,
         TestStarTellerCLIFunctionality,
-        TestStarTellerCLICustomObjects,
         TestStarTellerCLIErrorHandling
     ]
     
@@ -457,10 +400,9 @@ def run_comprehensive_test():
     if result.wasSuccessful():
         print("🎉 ALL TESTS PASSED!")
         print("✅ Download functionality working")
-        print("✅ Catalog loading and filtering working")
+        print("✅ Catalog loading working")
         print("✅ Caching system working")
         print("✅ Core calculations working")
-        print("✅ Custom objects working")
         print("✅ Error handling working")
         print("\nStarTeller-CLI is ready for production use!")
     else:
@@ -480,7 +422,7 @@ def quick_integration_test():
     
     try:
         # Test basic functionality
-        st = StarTellerCLI(40.7, -74.0, elevation=50, catalog_filter="messier")
+        st = StarTellerCLI(40.7, -74.0, elevation=50)
         
         # Override cache directory for testing
         def mock_get_cache_filepath(year=None):

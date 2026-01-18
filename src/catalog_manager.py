@@ -28,11 +28,8 @@ def download_ngc_catalog(ngc_path):
     """
     Automatically download the NGC.csv file from OpenNGC GitHub repository.
     
-    Args:
-        ngc_path (str): Path where the file should be saved
-        
-    Returns:
-        bool: True if download successful, False otherwise
+    Takes: path where the file should be saved (str)
+    Returns: True if download successful, False otherwise
     """
     url = "https://raw.githubusercontent.com/mattiaverga/OpenNGC/refs/heads/master/database_files/NGC.csv"
     
@@ -66,11 +63,8 @@ def download_addendum_catalog(addendum_path):
     """
     Automatically download the addendum.csv file from OpenNGC GitHub repository.
     
-    Args:
-        addendum_path (str): Path where the file should be saved
-        
-    Returns:
-        bool: True if download successful, False otherwise
+    Takes: path where the file should be saved (str)
+    Returns: True if download successful, False otherwise
     """
     url = "https://raw.githubusercontent.com/mattiaverga/OpenNGC/refs/heads/master/database_files/addendum.csv"
     
@@ -100,26 +94,16 @@ def download_addendum_catalog(addendum_path):
         print(f"❌ Error downloading addendum.csv: {e}")
         return False
 
-def load_ngc_catalog(catalog_filter="all"):
+def load_ngc_catalog():
     """
     Load NGC/IC catalog from local OpenNGC file, including addendum objects.
     
     The addendum includes additional objects from various catalogs:
     - Caldwell (C), Barnard (B), UGC, PGC, ESO, Harvard (H), Melotte (Mel),
-      MWSC, HCG, and Cl objects. When filter is "all", these are included.
-    
-    Args:
-        catalog_filter (str): Filter catalog by type ("messier", "ic", "ngc", "all")
+      MWSC, HCG, and Cl objects.
         
-    Returns:
-        pandas.DataFrame: NGC catalog data or empty DataFrame if file not found
+    Returns: NGC catalog data or empty if file not found (pandas DataFrame)
     """
-    filter_names = {
-        "messier": "Messier",
-        "ic": "IC", 
-        "ngc": "NGC",
-        "all": "All NGC/IC"
-    }
     try:
         # Check for the OpenNGC catalog file in user data directory
         user_data_dir = get_user_data_dir()
@@ -163,19 +147,6 @@ def load_ngc_catalog(catalog_filter="all"):
             except Exception as e:
                 print(f"⚠️  Warning: Could not load addendum.csv: {e}")
                 print("   Continuing with NGC/IC catalog only...")
-        
-        # Apply catalog filter
-        if catalog_filter == "messier":
-            # Only objects with Messier designations
-            df = df[df['M'].notna() & (df['M'] != '')].copy()
-        elif catalog_filter == "ic":
-            # Only IC objects
-            df = df[df['Name'].str.startswith('IC')].copy()
-        elif catalog_filter == "ngc":
-            # Only NGC objects
-            df = df[df['Name'].str.startswith('NGC')].copy()
-        # else: All objects (no filter needed)
-
         
         # Parse coordinates from HMS/DMS to decimal degrees
         def parse_coordinate(coord_str, is_ra=False):
@@ -316,6 +287,16 @@ def load_ngc_catalog(catalog_filter="all"):
                 return 'M40'
             return name
         
+        def format_messier(m_val):
+            """Convert raw M column value (e.g. '33.0') to formatted string (e.g. 'M33')"""
+            if pd.isna(m_val) or str(m_val).strip() == '':
+                return ''
+            try:
+                messier_num = int(float(str(m_val).strip()))
+                return f"M{messier_num}"
+            except (ValueError, TypeError):
+                return ''
+        
         catalog_df = pd.DataFrame({
             'object_id': df['Name'].apply(normalize_messier_id),
             'name': df['Name'].apply(clean_name),
@@ -324,35 +305,8 @@ def load_ngc_catalog(catalog_filter="all"):
             'type': df['expanded_type'],
             'magnitude': df['magnitude'],
             'common_name': df['Common names'].fillna(''),
-            'messier': df['M'].fillna('')
+            'messier': df['M'].apply(format_messier)
         })
-        
-        # Add Messier cross-references
-        messier_objects = []
-        for _, row in catalog_df.iterrows():
-            if row['messier'] and str(row['messier']).strip():
-                # Convert to int to remove decimals and leading zeros (033.0 -> 33)
-                try:
-                    messier_num = int(float(str(row['messier']).strip()))
-                    messier_id = f"M{messier_num}"
-                    messier_name = row['common_name'] if row['common_name'] else row['name']
-                except (ValueError, TypeError):
-                    continue  # Skip invalid Messier numbers
-                messier_objects.append({
-                    'object_id': messier_id,
-                    'name': messier_name,
-                    'ra_deg': row['ra_deg'],
-                    'dec_deg': row['dec_deg'],
-                    'type': row['type'],
-                    'magnitude': row['magnitude'],
-                    'common_name': row['common_name'],
-                    'messier': row['messier']
-                })
-        
-        # Add Messier entries to catalog
-        if messier_objects:
-            messier_df = pd.DataFrame(messier_objects)
-            catalog_df = pd.concat([catalog_df, messier_df], ignore_index=True)
         
         # Filter to reasonable coordinate ranges
         catalog_df = catalog_df[
