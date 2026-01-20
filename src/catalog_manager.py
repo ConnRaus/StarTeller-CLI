@@ -26,12 +26,12 @@ def get_user_data_dir():
 
 def download_ngc_catalog(ngc_path):
     """
-    Automatically download the NGC.csv file from OpenNGC GitHub repository.
+    Automatically download the NGC.csv file from Modified_OpenNGC GitHub repository.
     
     Takes: path where the file should be saved (str)
     Returns: True if download successful, False otherwise
     """
-    url = "https://raw.githubusercontent.com/mattiaverga/OpenNGC/refs/heads/master/database_files/NGC.csv"
+    url = "https://raw.githubusercontent.com/ConnRaus/Modified_OpenNGC/refs/heads/master/database_files/NGC.csv"
     
     try:
         print("📥 NGC.csv not found - downloading from OpenNGC repository...")
@@ -61,12 +61,12 @@ def download_ngc_catalog(ngc_path):
 
 def download_addendum_catalog(addendum_path):
     """
-    Automatically download the addendum.csv file from OpenNGC GitHub repository.
+    Automatically download the addendum.csv file from Modified_OpenNGC GitHub repository.
     
     Takes: path where the file should be saved (str)
     Returns: True if download successful, False otherwise
     """
-    url = "https://raw.githubusercontent.com/mattiaverga/OpenNGC/refs/heads/master/database_files/addendum.csv"
+    url = "https://raw.githubusercontent.com/ConnRaus/Modified_OpenNGC/refs/heads/master/database_files/addendum.csv"
     
     try:
         print("📥 addendum.csv not found - downloading from OpenNGC repository...")
