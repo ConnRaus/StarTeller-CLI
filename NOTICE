@@ -1,0 +1,38 @@
+================================================================================
+
+DATA LICENSE
+
+The astronomical catalog data used by this software is sourced from the OpenNGC
+project (https://github.com/mattiaverga/OpenNGC) and is licensed under the
+Creative Commons Attribution-ShareAlike 4.0 International License (CC-BY-SA-4.0).
+
+OpenNGC License Terms:
+
+- Copyright (c) Mattia Verga and OpenNGC contributors
+- License: CC-BY-SA-4.0 (https://creativecommons.org/licenses/by-sa/4.0/)
+- Source: https://github.com/mattiaverga/OpenNGC
+- Database files: NGC.csv and associated catalog data
+
+Attribution Requirements:
+When using or redistributing this software, you must:
+
+1. Provide attribution to the OpenNGC project and Mattia Verga
+2. Include a link to the OpenNGC repository
+3. Indicate if changes were made to the catalog data
+4. Share any derivative works under the same CC-BY-SA-4.0 license
+
+For full CC-BY-SA-4.0 license terms, see: https://creativecommons.org/licenses/by-sa/4.0/
+
+================================================================================
+
+THIRD-PARTY DEPENDENCIES
+
+This software uses the following third-party libraries, each with their own licenses:
+
+- Pandas: BSD 3-Clause License (https://github.com/pandas-dev/pandas)
+- NumPy: BSD 3-Clause License (https://github.com/numpy/numpy)
+- PyTZ: MIT License (https://github.com/stub42/pytz)
+- TimezoneFinder: MIT License (https://github.com/jannikmi/timezonefinder)
+- tqdm: MIT License (https://github.com/tqdm/tqdm)
+
+Please refer to each library's respective repository for their full license terms.
