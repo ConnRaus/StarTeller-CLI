@@ -654,7 +654,10 @@ class StarTellerCLI:
                     'dec': float(row['dec_deg']),
                     'name': display_name,
                     'type': row['type'],
-                    'messier': row.get('messier', '')
+                    'messier': row.get('messier', ''),
+                    'major_axis_arcmin': row.get('major_axis_arcmin', np.nan),
+                    'minor_axis_arcmin': row.get('minor_axis_arcmin', np.nan),
+                    'position_angle_deg': row.get('position_angle_deg', np.nan)
                 }
             
             print(f"✓ Catalog: {len(catalog_dict)} objects loaded")
@@ -925,6 +928,17 @@ class StarTellerCLI:
         # Convert tuple results to DataFrame
         results_df = pd.DataFrame(results, columns=columns)
         results_df['Timezone'] = local_tz_str
+        
+        # Add angular size columns from catalog
+        results_df['Major_Axis_arcmin'] = results_df['Object'].map(
+            lambda x: self.dso_catalog.get(x, {}).get('major_axis_arcmin', np.nan)
+        )
+        results_df['Minor_Axis_arcmin'] = results_df['Object'].map(
+            lambda x: self.dso_catalog.get(x, {}).get('minor_axis_arcmin', np.nan)
+        )
+        results_df['Position_Angle_deg'] = results_df['Object'].map(
+            lambda x: self.dso_catalog.get(x, {}).get('position_angle_deg', np.nan)
+        )
         
         if results_df.empty:
             return results_df

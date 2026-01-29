@@ -113,6 +113,26 @@ class TestStarTellerCLICatalog(unittest.TestCase):
             # Messier field should be formatted like "M31", "M42", etc.
             for m_val in messier_objects['messier'].head(10):
                 self.assertTrue(m_val.startswith('M'), f"Messier value '{m_val}' should start with 'M'")
+    
+    def test_angular_size_columns(self):
+        """Test that angular size columns are present and contain valid data."""
+        catalog = load_ngc_catalog()
+        
+        # Should have angular size columns
+        angular_size_columns = ['major_axis_arcmin', 'minor_axis_arcmin', 'position_angle_deg']
+        for col in angular_size_columns:
+            self.assertIn(col, catalog.columns)
+        
+        # Some objects should have angular size data (not all NaN)
+        # Large galaxies like M31 should have major axis data
+        m31_candidates = catalog[catalog['messier'] == 'M31']
+        if not m31_candidates.empty:
+            m31 = m31_candidates.iloc[0]
+            # M31 (Andromeda) has a major axis of about 190 arcmin
+            self.assertTrue(
+                pd.notna(m31['major_axis_arcmin']),
+                "M31 should have major axis data"
+            )
 
 
 class TestStarTellerCLICaching(unittest.TestCase):

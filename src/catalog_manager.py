@@ -305,7 +305,10 @@ def load_ngc_catalog():
             'type': df['expanded_type'],
             'magnitude': df['magnitude'],
             'common_name': df['Common names'].fillna(''),
-            'messier': df['M'].apply(format_messier)
+            'messier': df['M'].apply(format_messier),
+            'major_axis_arcmin': pd.to_numeric(df['MajAx'], errors='coerce'),
+            'minor_axis_arcmin': pd.to_numeric(df['MinAx'], errors='coerce'),
+            'position_angle_deg': pd.to_numeric(df['PosAng'], errors='coerce')
         })
         
         # Filter to reasonable coordinate ranges
