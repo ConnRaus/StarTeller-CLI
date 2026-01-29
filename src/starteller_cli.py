@@ -237,7 +237,7 @@ def _process_object_worker(args):
         
         if total_good_nights == 0:
             return (obj_id, name, obj_type, messier_num, ra_j2000, dec_j2000, 'N/A', 'N/A', 'Never visible', 'N/A', 
-                    'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 0, 0, 0, 'N/A', 'N/A')
+                    'N/A', 'N/A', 'N/A', 'N/A', 0, 0, 'N/A', 'N/A')
         
         # Find best night
         masked_altitudes = np.where(valid_mask, alt_degrees, -999)
@@ -301,34 +301,34 @@ def _process_object_worker(args):
             # Visible entire night
             rise_time = best_dark_start.strftime('%H:%M')
             set_time = best_dark_end.strftime('%H:%M')
-            rise_dir = _azimuth_to_cardinal(sample_az[0])
-            set_dir = _azimuth_to_cardinal(sample_az[-1])
+            rise_az = round(float(sample_az[0]), 1)
+            set_az = round(float(sample_az[-1]), 1)
             duration = round(dark_duration_hours, 1)
         elif visible[0]:
             # Visible at start, sets during night
             rise_time = best_dark_start.strftime('%H:%M')
-            rise_dir = _azimuth_to_cardinal(sample_az[0])
+            rise_az = round(float(sample_az[0]), 1)
             if set_idx is not None:
                 set_datetime = datetime.fromtimestamp(sample_ts[set_idx], tz=_worker_local_tz)
                 set_time = set_datetime.strftime('%H:%M')
-                set_dir = _azimuth_to_cardinal(sample_az[set_idx])
+                set_az = round(float(sample_az[set_idx]), 1)
                 duration = round((set_datetime - best_dark_start).total_seconds() / 3600, 1)
             else:
                 set_time = best_dark_end.strftime('%H:%M')
-                set_dir = _azimuth_to_cardinal(sample_az[-1])
+                set_az = round(float(sample_az[-1]), 1)
                 duration = round(dark_duration_hours, 1)
         elif visible[-1]:
             # Rises during night, visible at end
             set_time = best_dark_end.strftime('%H:%M')
-            set_dir = _azimuth_to_cardinal(sample_az[-1])
+            set_az = round(float(sample_az[-1]), 1)
             if rise_idx is not None:
                 rise_datetime = datetime.fromtimestamp(sample_ts[rise_idx], tz=_worker_local_tz)
                 rise_time = rise_datetime.strftime('%H:%M')
-                rise_dir = _azimuth_to_cardinal(sample_az[rise_idx])
+                rise_az = round(float(sample_az[rise_idx]), 1)
                 duration = round((best_dark_end - rise_datetime).total_seconds() / 3600, 1)
             else:
                 rise_time = best_dark_start.strftime('%H:%M')
-                rise_dir = _azimuth_to_cardinal(sample_az[0])
+                rise_az = round(float(sample_az[0]), 1)
                 duration = round(dark_duration_hours, 1)
         else:
             # Object rises AND sets during the night
@@ -337,40 +337,40 @@ def _process_object_worker(args):
                 set_datetime = datetime.fromtimestamp(sample_ts[set_idx], tz=_worker_local_tz)
                 rise_time = rise_datetime.strftime('%H:%M')
                 set_time = set_datetime.strftime('%H:%M')
-                rise_dir = _azimuth_to_cardinal(sample_az[rise_idx])
-                set_dir = _azimuth_to_cardinal(sample_az[set_idx])
+                rise_az = round(float(sample_az[rise_idx]), 1)
+                set_az = round(float(sample_az[set_idx]), 1)
                 duration = round((set_datetime - rise_datetime).total_seconds() / 3600, 1)
             elif rise_idx is not None:
                 rise_datetime = datetime.fromtimestamp(sample_ts[rise_idx], tz=_worker_local_tz)
                 rise_time = rise_datetime.strftime('%H:%M')
-                rise_dir = _azimuth_to_cardinal(sample_az[rise_idx])
+                rise_az = round(float(sample_az[rise_idx]), 1)
                 set_time = best_dark_end.strftime('%H:%M')
-                set_dir = _azimuth_to_cardinal(sample_az[-1])
+                set_az = round(float(sample_az[-1]), 1)
                 duration = round((best_dark_end - rise_datetime).total_seconds() / 3600, 1)
             elif set_idx is not None:
                 set_datetime = datetime.fromtimestamp(sample_ts[set_idx], tz=_worker_local_tz)
                 rise_time = best_dark_start.strftime('%H:%M')
-                rise_dir = _azimuth_to_cardinal(sample_az[0])
+                rise_az = round(float(sample_az[0]), 1)
                 set_time = set_datetime.strftime('%H:%M')
-                set_dir = _azimuth_to_cardinal(sample_az[set_idx])
+                set_az = round(float(sample_az[set_idx]), 1)
                 duration = round((set_datetime - best_dark_start).total_seconds() / 3600, 1)
             else:
                 # Fallback - shouldn't happen if object is visible at midpoint
                 rise_time = best_midpoint.strftime('%H:%M')
                 set_time = best_midpoint.strftime('%H:%M')
-                rise_dir = _azimuth_to_cardinal(best_azimuth)
-                set_dir = _azimuth_to_cardinal(best_azimuth)
+                rise_az = best_azimuth
+                set_az = best_azimuth
                 duration = round(np.sum(visible) / num_samples * dark_duration_hours, 1)
         
         return (obj_id, name, obj_type, messier_num, ra_j2000, dec_j2000, best_date, best_midpoint.strftime('%H:%M'),
-                best_altitude, best_azimuth, _azimuth_to_cardinal(best_azimuth),
-                rise_time, rise_dir, set_time, set_dir, duration,
-                total_good_nights, total_good_nights,
+                best_altitude, best_azimuth,
+                rise_time, rise_az, set_time, set_az, duration,
+                total_good_nights,
                 best_dark_start.strftime('%H:%M'), best_dark_end.strftime('%H:%M'))
         
     except Exception as e:
         return (obj_id, name, obj_type, messier_num, ra_j2000, dec_j2000, 'N/A', 'N/A', 'Error', 'N/A', 
-                'N/A', 'N/A', 'N/A', 'N/A', 'N/A', 0, 0, 0, 'N/A', 'N/A')
+                'N/A', 'N/A', 'N/A', 'N/A', 0, 0, 'N/A', 'N/A')
 
 def _calc_sun_position(jd_array):
     """
@@ -566,31 +566,6 @@ def _calculate_year_midpoints_worker(args):
     except Exception as e:
         print(f"Error calculating midpoints for year {year}: {e}")
         return (year, None)
-
-def _azimuth_to_cardinal(azimuth):
-    if isinstance(azimuth, np.ndarray):
-        # Vectorized version for numpy arrays
-        result = np.empty(azimuth.shape, dtype='U2')
-        result[:] = 'N'
-        result[(azimuth >= 22.5) & (azimuth < 67.5)] = 'NE'
-        result[(azimuth >= 67.5) & (azimuth < 112.5)] = 'E'
-        result[(azimuth >= 112.5) & (azimuth < 157.5)] = 'SE'
-        result[(azimuth >= 157.5) & (azimuth < 202.5)] = 'S'
-        result[(azimuth >= 202.5) & (azimuth < 247.5)] = 'SW'
-        result[(azimuth >= 247.5) & (azimuth < 292.5)] = 'W'
-        result[(azimuth >= 292.5) & (azimuth < 337.5)] = 'NW'
-        return result
-    else:
-        # Scalar version
-        directions = [
-            (0, 22.5, "N"), (22.5, 67.5, "NE"), (67.5, 112.5, "E"), (112.5, 157.5, "SE"),
-            (157.5, 202.5, "S"), (202.5, 247.5, "SW"), (247.5, 292.5, "W"), (292.5, 337.5, "NW"),
-            (337.5, 360, "N")
-        ]
-        for min_az, max_az, direction in directions:
-            if min_az <= azimuth < max_az:
-                return direction
-        return "N"
 
 class StarTellerCLI:
     # ============================================================================
@@ -903,9 +878,9 @@ class StarTellerCLI:
         
         results = []
         columns = ['Object', 'Name', 'Type', 'Messier', 'Right_Ascension', 'Declination', 'Best_Date', 'Best_Time_Local',
-                   'Max_Altitude_deg', 'Azimuth_deg', 'Direction',
-                   'Rise_Time_Local', 'Rise_Direction', 'Set_Time_Local', 'Set_Direction',
-                   'Observing_Duration_Hours', 'Dark_Nights_Per_Year', 'Good_Viewing_Periods',
+                   'Max_Altitude_deg', 'Azimuth_deg',
+                   'Rise_Time_Local', 'Rise_Direction_deg', 'Set_Time_Local', 'Set_Direction_deg',
+                   'Observing_Duration_Hours', 'Visible_Nights_Per_Year',
                    'Dark_Start_Local', 'Dark_End_Local']
         
         with Pool(
@@ -927,7 +902,6 @@ class StarTellerCLI:
         
         # Convert tuple results to DataFrame
         results_df = pd.DataFrame(results, columns=columns)
-        results_df['Timezone'] = local_tz_str
         
         # Add angular size columns from catalog
         results_df['Major_Axis_arcmin'] = results_df['Object'].map(
@@ -939,6 +913,18 @@ class StarTellerCLI:
         results_df['Position_Angle_deg'] = results_df['Object'].map(
             lambda x: self.dso_catalog.get(x, {}).get('position_angle_deg', np.nan)
         )
+        results_df['Timezone'] = local_tz_str
+        
+        # Reorder columns to user-specified order
+        final_columns = [
+            'Object', 'Name', 'Type', 'Messier', 'Right_Ascension', 'Declination',
+            'Major_Axis_arcmin', 'Minor_Axis_arcmin', 'Position_Angle_deg',
+            'Best_Date', 'Best_Time_Local', 'Max_Altitude_deg', 'Azimuth_deg',
+            'Rise_Time_Local', 'Rise_Direction_deg', 'Set_Time_Local', 'Set_Direction_deg',
+            'Observing_Duration_Hours', 'Visible_Nights_Per_Year',
+            'Dark_Start_Local', 'Dark_End_Local', 'Timezone'
+        ]
+        results_df = results_df[final_columns]
         
         if results_df.empty:
             return results_df

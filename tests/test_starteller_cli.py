@@ -287,7 +287,8 @@ class TestStarTellerCLIFunctionality(unittest.TestCase):
         # Check required columns exist
         required_columns = [
             'Object', 'Name', 'Type', 'Best_Date', 'Best_Time_Local',
-            'Max_Altitude_deg', 'Azimuth_deg', 'Direction'
+            'Max_Altitude_deg', 'Azimuth_deg', 'Rise_Direction_deg', 'Set_Direction_deg',
+            'Major_Axis_arcmin', 'Minor_Axis_arcmin', 'Position_Angle_deg'
         ]
         for col in required_columns:
             self.assertIn(col, results.columns)
