@@ -54,6 +54,10 @@ def get_cache_dir():
 
 
 def get_output_dir():
+    """Get the output directory, using saved preference if available."""
+    saved_dir = load_output_dir()
+    if saved_dir:
+        return Path(saved_dir)
     return Path.cwd() / 'starteller_output'
 
 # Global variables for worker processes
@@ -972,6 +976,62 @@ def load_location():
         pass
     return None
 
+def save_output_dir(output_path):
+    """Save the user's preferred output directory."""
+    try:
+        user_data_dir = get_user_data_dir()
+        user_data_dir.mkdir(parents=True, exist_ok=True)
+        
+        output_file = user_data_dir / 'output_dir.txt'
+        with open(str(output_file), 'w') as f:
+            f.write(str(output_path))
+        print(f"✓ Output directory saved: {output_path}")
+    except Exception as e:
+        print(f"Warning: Could not save output directory: {e}")
+
+def load_output_dir():
+    """Load the user's saved output directory preference."""
+    try:
+        output_file = get_user_data_dir() / 'output_dir.txt'
+        if not output_file.exists():
+            return None
+        with open(str(output_file), 'r') as f:
+            path = f.read().strip()
+            if path:
+                return path
+    except:
+        pass
+    return None
+
+def get_user_output_dir():
+    """Get output directory from user, with option to save preference."""
+    saved_dir = load_output_dir()
+    
+    if saved_dir:
+        print(f"\nSaved output directory: {saved_dir}")
+        use_saved = input("Use saved output directory? (y/n, default y): ").strip().lower()
+        
+        if use_saved in ['', 'y', 'yes']:
+            return Path(saved_dir)
+    
+    # First run or user wants to change
+    print("\nOutput directory setup:")
+    print("  Enter a path for output files, or press Enter for default (./starteller_output)")
+    output_input = input("Output directory: ").strip()
+    
+    if output_input:
+        output_path = Path(output_input).expanduser().resolve()
+    else:
+        output_path = Path.cwd() / 'starteller_output'
+        print(f"  Using default: {output_path}")
+    
+    # Ask if they want to save it
+    save_choice = input("Save this output directory for future use? (y/n, default y): ").strip().lower()
+    if save_choice in ['', 'y', 'yes']:
+        save_output_dir(output_path)
+    
+    return output_path
+
 def get_user_location():
     saved_location = load_location()
     
@@ -1006,6 +1066,7 @@ def main():
     # === Collect all User Input ===
     
     latitude, longitude, elevation = get_user_location()
+    output_dir = get_user_output_dir()
 
     print("\nViewing preferences:")
     min_alt = float(input("Minimum altitude (degrees, default 20): ") or 20)
@@ -1035,8 +1096,7 @@ def main():
     # Calculate optimal viewing times
     results = st.find_optimal_viewing_times(min_altitude=min_alt, direction_filter=direction_filter)
     
-    # Save to output directory (created in current working directory)
-    output_dir = get_output_dir()
+    # Save to output directory
     output_dir.mkdir(parents=True, exist_ok=True)
     
     filename = output_dir / f"optimal_viewing_times_{datetime.now(pytz.UTC).strftime('%Y%m%d_%H%M')}.csv"
