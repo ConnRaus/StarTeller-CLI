@@ -40,52 +40,51 @@ python src/starteller_cli.py
 ## How it works
 
 1. Enter your coordinates (or use a saved location)
-2. Pick a catalog (Messier, NGC, IC, or all ~13,000 objects)
+2. Set your output directory (or use a saved preference)
 3. Set minimum altitude and optional direction filter
-4. Get a CSV with optimal viewing times for each object
+4. Get a CSV with optimal viewing times for ~13,000 deep sky objects
 
 The first run downloads the NGC catalog and Addendum (~4MB) and calculates night darkness times for the year. Both are cached, so subsequent runs are fast.
 
 ## Output
 
-Results go to `starteller_output/` in your current directory. The CSV includes:
+Results go to `starteller_output/` by default, or a custom directory you set on first run. The CSV includes:
 
-| Column                   | Description                                 |
-| ------------------------ | ------------------------------------------- |
-| Object                   | NGC/IC/Messier ID                           |
-| Name                     | Common name if available                    |
-| Type                     | Galaxy, Nebula, Cluster, etc.               |
-| RA                       | Right Ascension in degrees                  |
-| Dec                      | Declination in degrees                      |
-| Best_Date                | Date when object is highest at midnight     |
-| Best_Time_Local          | Time of peak altitude                       |
-| Max_Altitude_deg         | Maximum altitude reached                    |
-| Azimuth_deg              | Azimuth angle at peak altitude              |
-| Direction                | Cardinal direction (N, NE, E, etc.)         |
-| Rise_Time_Local          | When it rises above your minimum altitude   |
-| Rise_Direction           | Direction it rises from                     |
-| Set_Time_Local           | When it drops below minimum altitude        |
-| Set_Direction            | Direction it sets toward                    |
-| Observing_Duration_Hours | Total time above minimum altitude           |
-| Dark_Nights_Per_Year     | Number of nights with astronomical darkness |
-| Good_Viewing_Periods     | Number of good viewing periods              |
-| Dark_Start_Local         | Start of astronomical darkness              |
-| Dark_End_Local           | End of astronomical darkness                |
-| Timezone                 | Timezone used for local times               |
+| Column                   | Description                                  |
+| ------------------------ | -------------------------------------------- |
+| Object                   | NGC/IC/Messier ID                            |
+| Name                     | Common name if available                     |
+| Type                     | Galaxy, Nebula, Cluster, etc.                |
+| Messier                  | Messier number if applicable (e.g., M31)     |
+| Right_Ascension          | Right Ascension in degrees (J2000)           |
+| Declination              | Declination in degrees (J2000)               |
+| Major_Axis_arcmin        | Major axis angular size in arcminutes        |
+| Minor_Axis_arcmin        | Minor axis angular size in arcminutes        |
+| Position_Angle_deg       | Position angle of major axis (N through E)   |
+| Best_Date                | Date when object is highest at midnight      |
+| Best_Time_Local          | Time of peak altitude                        |
+| Max_Altitude_deg         | Maximum altitude reached                     |
+| Azimuth_deg              | Azimuth at peak altitude (0°=N, 90°=E, etc.) |
+| Rise_Time_Local          | When it rises above your minimum altitude    |
+| Rise_Direction_deg       | Azimuth when rising                          |
+| Set_Time_Local           | When it drops below minimum altitude         |
+| Set_Direction_deg        | Azimuth when setting                         |
+| Observing_Duration_Hours | Total time above minimum altitude            |
+| Visible_Nights_Per_Year  | Nights meeting altitude/direction criteria   |
+| Dark_Start_Local         | Start of astronomical darkness               |
+| Dark_End_Local           | End of astronomical darkness                 |
+| Timezone                 | Timezone used for local times                |
 
 ## Options
 
-**Catalogs:**
-
-- Messier (~110 objects)
-- NGC (~8,000 objects)
-- IC (~5,000 objects)
-- All (~13,000 objects)
-
 **Filters:**
 
-- Minimum altitude (default 20°)
-- Direction filter - e.g., `90,180` for objects in the East to South
+- Minimum altitude (default 20°) - objects must reach this altitude during dark time
+- Direction filter - azimuth range, e.g., `90,180` for objects in the East to South
+
+**Included catalogs:**
+
+The output includes all ~13,000 objects from NGC, IC, Messier, Caldwell, and other catalogs from OpenNGC.
 
 ## Python API
 
@@ -97,8 +96,7 @@ from src.starteller_cli import StarTellerCLI
 st = StarTellerCLI(
     latitude=40.7,
     longitude=-74.0,
-    elevation=10,
-    catalog_filter='messier'
+    elevation=10
 )
 
 results = st.find_optimal_viewing_times(min_altitude=25)
@@ -107,13 +105,13 @@ results = st.find_optimal_viewing_times(direction_filter=(90, 180))  # East to S
 
 ## File locations
 
-Data is stored in platform-specific directories:
+Data and settings are stored in platform-specific directories:
 
 **Windows:** `%LOCALAPPDATA%\StarTeller-CLI\`  
 **Linux:** `~/.local/share/starteller-cli/`  
 **macOS:** `~/Library/Application Support/StarTeller-CLI/`
 
-Cache goes to the platform's cache directory. Output CSVs go to `./starteller_output/`.
+This includes the NGC catalog, your saved location, and output directory preference. Cache (night calculations) goes to the platform's cache directory. Output CSVs go to your configured output directory (default: `./starteller_output/`).
 
 ## Requirements
 

@@ -9,7 +9,7 @@ Modules:
     catalog_manager: NGC/IC catalog loading and management
 """
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 __author__ = "ConnRaus"
 
 from .starteller_cli import StarTellerCLI, get_user_location, main
