@@ -10,6 +10,7 @@ import tempfile
 import shutil
 import unittest
 from unittest.mock import patch
+from io import StringIO
 from pathlib import Path
 import pandas as pd
 import pickle
@@ -18,7 +19,7 @@ from datetime import datetime, date
 # Add src directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from starteller_cli import StarTellerCLI
+from starteller_cli import StarTellerCLI, run_clean, get_user_data_dir, get_cache_dir
 try:
     from src.catalog_manager import load_ngc_catalog, download_ngc_catalog
 except ImportError:
@@ -386,6 +387,91 @@ class TestStarTellerCLIErrorHandling(unittest.TestCase):
         self.assertIsNone(loaded_data)
 
 
+class TestStarTellerCLIClean(unittest.TestCase):
+    """Test --clean: removal of user data and cache for fresh run."""
+
+    def setUp(self):
+        """Use temp dirs for user data and cache so we don't touch real data."""
+        self.test_user_data_dir = Path(tempfile.mkdtemp())
+        self.test_cache_dir = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        """Remove temp dirs if they still exist (clean may have removed them)."""
+        for d in (self.test_user_data_dir, self.test_cache_dir):
+            if d.exists():
+                shutil.rmtree(d)
+
+    @patch("starteller_cli.get_cache_dir")
+    @patch("starteller_cli.get_user_data_dir")
+    def test_clean_removes_user_data_and_cache(self, mock_user_data_dir, mock_cache_dir):
+        """run_clean removes both user data and cache directories when they exist."""
+        mock_user_data_dir.return_value = self.test_user_data_dir
+        mock_cache_dir.return_value = self.test_cache_dir
+        # Create typical contents
+        (self.test_user_data_dir / "NGC.csv").write_text("Name;Type;RA;Dec\nNGC1;G;00:00:00;+00:00:00\n")
+        (self.test_user_data_dir / "addendum.csv").write_text("Name;Type;RA;Dec\n")
+        (self.test_user_data_dir / "user_location.txt").write_text("40.0,-74.0,0")
+        (self.test_user_data_dir / "output_dir.txt").write_text("/tmp/out")
+        (self.test_cache_dir / "night_midpoints_foo_2025.pkl").write_bytes(b"fake pickle")
+        self.assertTrue(self.test_user_data_dir.exists())
+        self.assertTrue(self.test_cache_dir.exists())
+
+        run_clean()
+
+        self.assertFalse(self.test_user_data_dir.exists(), "user data dir should be removed")
+        self.assertFalse(self.test_cache_dir.exists(), "cache dir should be removed")
+
+    @patch("starteller_cli.get_cache_dir")
+    @patch("starteller_cli.get_user_data_dir")
+    def test_clean_when_dirs_missing(self, mock_user_data_dir, mock_cache_dir):
+        """run_clean does not raise when user data and cache dirs do not exist."""
+        missing_user = Path(tempfile.mkdtemp())
+        missing_cache = Path(tempfile.mkdtemp())
+        shutil.rmtree(missing_user)
+        shutil.rmtree(missing_cache)
+        mock_user_data_dir.return_value = missing_user
+        mock_cache_dir.return_value = missing_cache
+        self.assertFalse(missing_user.exists())
+        self.assertFalse(missing_cache.exists())
+
+        with patch("sys.stdout", new_callable=StringIO) as stdout:
+            run_clean()
+            out = stdout.getvalue()
+        self.assertIn("already clean", out.lower())
+
+    @patch("starteller_cli.get_cache_dir")
+    @patch("starteller_cli.get_user_data_dir")
+    def test_clean_removes_only_cache_when_user_data_missing(self, mock_user_data_dir, mock_cache_dir):
+        """run_clean removes cache when present and skips missing user data dir."""
+        missing_user = Path(tempfile.mkdtemp())
+        shutil.rmtree(missing_user)
+        mock_user_data_dir.return_value = missing_user
+        mock_cache_dir.return_value = self.test_cache_dir
+        (self.test_cache_dir / "night_midpoints_2025.pkl").write_bytes(b"x")
+
+        run_clean()
+
+        self.assertFalse(missing_user.exists())
+        self.assertFalse(self.test_cache_dir.exists())
+
+    @patch("starteller_cli.get_cache_dir")
+    @patch("starteller_cli.get_user_data_dir")
+    def test_clean_prints_removed_paths(self, mock_user_data_dir, mock_cache_dir):
+        """run_clean prints the paths it removed."""
+        mock_user_data_dir.return_value = self.test_user_data_dir
+        mock_cache_dir.return_value = self.test_cache_dir
+        (self.test_user_data_dir / "NGC.csv").write_text("dummy")
+        (self.test_cache_dir / "x.pkl").write_bytes(b"x")
+
+        with patch("sys.stdout", new_callable=StringIO) as stdout:
+            run_clean()
+            out = stdout.getvalue()
+
+        self.assertIn("Removed user data and cache", out)
+        self.assertIn(str(self.test_user_data_dir), out)
+        self.assertIn(str(self.test_cache_dir), out)
+
+
 def run_comprehensive_test():
     """Run all tests and provide summary."""
     print("=" * 60)
@@ -399,10 +485,11 @@ def run_comprehensive_test():
     # Add all test classes
     test_classes = [
         TestStarTellerCLIDownload,
-        TestStarTellerCLICatalog, 
+        TestStarTellerCLICatalog,
         TestStarTellerCLICaching,
         TestStarTellerCLIFunctionality,
-        TestStarTellerCLIErrorHandling
+        TestStarTellerCLIErrorHandling,
+        TestStarTellerCLIClean,
     ]
     
     for test_class in test_classes:

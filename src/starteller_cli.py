@@ -7,6 +7,7 @@ A command-line tool to find the best times to observe deep sky objects throughou
 import os
 import pickle
 import hashlib
+import shutil
 import sys
 from datetime import datetime, timedelta
 from multiprocessing import Pool, cpu_count
@@ -1056,6 +1057,26 @@ def get_user_location():
     
     return latitude, longitude, elevation
 
+def run_clean():
+    """Remove all user data and cache (NGC.csv, addendum.csv, location, output pref, cache files) for a fresh run."""
+    user_data_dir = get_user_data_dir()
+    cache_dir = get_cache_dir()
+    removed = []
+    if cache_dir.exists():
+        shutil.rmtree(cache_dir)
+        removed.append(str(cache_dir))
+    if user_data_dir.exists():
+        shutil.rmtree(user_data_dir)
+        removed.append(str(user_data_dir))
+    if removed:
+        print("StarTeller-CLI --clean: Removed user data and cache:")
+        for path in removed:
+            print(f"  ✓ {path}")
+        print("Next run will prompt for location and re-download NGC.csv and addendum.csv as needed.")
+    else:
+        print("StarTeller-CLI --clean: No user data or cache directories found (already clean).")
+
+
 def main():
     """Main function to run StarTeller-CLI."""
     print("=" * 60)
@@ -1117,4 +1138,7 @@ def main():
 
 
 if __name__ == "__main__":
+    if "--clean" in sys.argv:
+        run_clean()
+        sys.exit(0)
     main() 
