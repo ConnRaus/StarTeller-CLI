@@ -580,11 +580,10 @@ class StarTellerCLI:
     def __init__(self, latitude, longitude, elevation=0):
         """
         Initialize StarTellerCLI with observer location.      
-        Args: lat(float), long(float), *elevation(m)
+        Args: lat(float), long(float), *elevation(m, unused – kept for API compat)
         """
         self.latitude = latitude
         self.longitude = longitude
-        self.elevation = elevation
         
         # Create location hash for caching
         self.location_hash = self._generate_location_hash()
@@ -949,15 +948,15 @@ class StarTellerCLI:
         return results_df
 
 
-def save_location(latitude, longitude, elevation):
+def save_location(latitude, longitude):
     try:
         user_data_dir = get_user_data_dir()
         user_data_dir.mkdir(parents=True, exist_ok=True)
-        
+
         location_file = user_data_dir / 'user_location.txt'
         with open(str(location_file), 'w') as f:
-            f.write(f"{latitude},{longitude},{elevation}")
-        print(f"✓ Location saved: {latitude:.2f}°, {longitude:.2f}°, {elevation}m")
+            f.write(f"{latitude},{longitude}")
+        print(f"✓ Location saved: {latitude:.2f}°, {longitude:.2f}°")
     except Exception as e:
         print(f"Warning: Could not save location: {e}")
 
@@ -968,11 +967,10 @@ def load_location():
             return None
         with open(str(location_file), 'r') as f:
             data = f.read().strip().split(',')
-            if len(data) == 3:
+            if len(data) >= 2:
                 latitude = float(data[0])
                 longitude = float(data[1])
-                elevation = float(data[2])
-                return latitude, longitude, elevation
+                return latitude, longitude
     except:
         pass
     return None
@@ -1037,25 +1035,24 @@ def get_user_location():
     saved_location = load_location()
     
     if saved_location:
-        latitude, longitude, elevation = saved_location
-        print(f"\nSaved location found: {latitude:.2f}°, {longitude:.2f}°, {elevation}m")
+        latitude, longitude = saved_location
+        print(f"\nSaved location found: {latitude:.2f}°, {longitude:.2f}°")
         use_saved = input("Use saved location? (y/n, default y): ").strip().lower()
         
         if use_saved in ['', 'y', 'yes']:
-            return latitude, longitude, elevation
+            return latitude, longitude
     
     # Get new location manually
     print("\nEnter your observing location:")
     latitude = float(input("Latitude (degrees, positive for North): "))
     longitude = float(input("Longitude (degrees, positive for East): "))
-    elevation = float(input("Elevation (meters, optional, press Enter for 0): ") or 0)
     
     # Ask if they want to save it
     save_choice = input("Save this location for future use? (y/n, default y): ").strip().lower()
     if save_choice in ['', 'y', 'yes']:
-        save_location(latitude, longitude, elevation)
+        save_location(latitude, longitude)
     
-    return latitude, longitude, elevation
+    return latitude, longitude
 
 def run_clean():
     """Remove all user data and cache (NGC.csv, addendum.csv, location, output pref, cache files) for a fresh run."""
@@ -1086,7 +1083,7 @@ def main():
     
     # === Collect all User Input ===
     
-    latitude, longitude, elevation = get_user_location()
+    latitude, longitude = get_user_location()
     output_dir = get_user_output_dir()
 
     print("\nViewing preferences:")
@@ -1108,7 +1105,7 @@ def main():
     # === User input collected, start processing ===
 
     # Create StarTellerCLI instance with appropriate catalog
-    st = StarTellerCLI(latitude, longitude, elevation)
+    st = StarTellerCLI(latitude, longitude)
     
     if st is None:
         print("Failed to create StarTellerCLI instance. Exiting.")
