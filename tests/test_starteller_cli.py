@@ -243,7 +243,6 @@ class TestStarTellerCLIFunctionality(unittest.TestCase):
         """Test StarTellerCLI initialization."""
         self.assertAlmostEqual(self.st.latitude, 40.7, places=1)
         self.assertAlmostEqual(self.st.longitude, -74.0, places=1)
-        self.assertEqual(self.st.elevation, 50)
         self.assertIsNotNone(self.st.local_tz)
         self.assertGreater(len(self.st.dso_catalog), 0)
     
@@ -252,7 +251,7 @@ class TestStarTellerCLIFunctionality(unittest.TestCase):
         hash1 = self.st._generate_location_hash()
         
         # Same location should produce same hash
-        st2 = StarTellerCLI(40.7, -74.0, elevation=100)  # Different elevation shouldn't matter for hash
+        st2 = StarTellerCLI(40.7, -74.0)
         # Mock cache directory for st2
         def mock_get_cache_filepath_st2(year=None):
             if year is None:
