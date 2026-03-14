@@ -807,20 +807,9 @@ class StarTellerCLI:
         if direction_filter:
             print(f"Direction filter: {direction_filter[0]}° to {direction_filter[1]}° azimuth")
         
-        # Remove coordinate duplicates (prefer NGC/IC objects over addendum catalogs)
-        unique_objects = {}
-        for obj_id, obj_data in self.dso_catalog.items():
-            coord_key = (round(obj_data['ra'], 4), round(obj_data['dec'], 4))
-            
-            if coord_key not in unique_objects:
-                unique_objects[coord_key] = (obj_id, obj_data)
-            else:
-                existing_id, _ = unique_objects[coord_key]
-                # Prefer NGC/IC objects over other catalogs
-                if (obj_id.startswith('NGC') or obj_id.startswith('IC')) and not (existing_id.startswith('NGC') or existing_id.startswith('IC')):
-                    unique_objects[coord_key] = (obj_id, obj_data)
-        
-        print(f"Processing {len(unique_objects)} unique objects")
+        # Keep all catalog objects (including duplicate IDs at same coordinates, e.g. NGC3271 and IC2585)
+        items = list(self.dso_catalog.items())
+        print(f"Processing {len(items)} objects")
         
         import time
         t_total_start = time.perf_counter()
@@ -846,7 +835,6 @@ class StarTellerCLI:
             night_dark_start_ts[i] = dark_start.timestamp()
             night_dark_end_ts[i] = dark_end.timestamp()
         
-        items = list(unique_objects.values())
         local_tz_str = str(self.local_tz)
         
         # Calculate mean epoch for precession (middle of calculation period)
