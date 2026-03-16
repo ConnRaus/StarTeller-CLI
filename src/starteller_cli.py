@@ -791,11 +791,11 @@ class StarTellerCLI:
     # MAIN FUNCTIONALITY
     # ============================================================================
     
-    def find_optimal_viewing_times(self, min_altitude=20, direction_filter=None):
+    def find_optimal_viewing_times(self, min_altitude=20, direction_filter=None, messier_only=False):
         """
         Find optimal viewing times for all objects in the catalog
         
-        Takes *minimum altitude in degrees, *direction filter (tuple)
+        Takes *minimum altitude in degrees, *direction filter (tuple), *messier_only (bool)
         Returns pandas final result dataframe
         """
         print("Calculating optimal viewing times for deep sky objects...")
@@ -809,7 +809,11 @@ class StarTellerCLI:
         
         # Keep all catalog objects (including duplicate IDs at same coordinates, e.g. NGC3271 and IC2585)
         items = list(self.dso_catalog.items())
-        print(f"Processing {len(items)} objects")
+        if messier_only:
+            items = [(k, v) for k, v in items if v.get('messier')]
+            print(f"Processing {len(items)} objects (Messier only)")
+        else:
+            print(f"Processing {len(items)} objects")
         
         import time
         t_total_start = time.perf_counter()
@@ -1064,6 +1068,9 @@ def run_clean():
 
 def main():
     """Main function to run StarTeller-CLI."""
+    # Hidden flag: only calculate Messier objects (not shown in help / user-facing CLI)
+    messier_only = "--messier-only" in sys.argv
+
     print("=" * 60)
     print("                   StarTeller-CLI")
     print("        Deep Sky Object Optimal Viewing Calculator")
@@ -1100,7 +1107,7 @@ def main():
         return
     
     # Calculate optimal viewing times
-    results = st.find_optimal_viewing_times(min_altitude=min_alt, direction_filter=direction_filter)
+    results = st.find_optimal_viewing_times(min_altitude=min_alt, direction_filter=direction_filter, messier_only=messier_only)
     
     # Save to output directory
     output_dir.mkdir(parents=True, exist_ok=True)
