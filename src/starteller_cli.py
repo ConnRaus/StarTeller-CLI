@@ -634,6 +634,9 @@ class StarTellerCLI:
                     'name': display_name,
                     'type': row['type'],
                     'messier': row.get('messier', ''),
+                    'constellation': row.get('constellation', '') or '',
+                    'v_mag': row.get('v_mag', np.nan),
+                    'surf_br': row.get('surf_br', np.nan),
                     'major_axis_arcmin': row.get('major_axis_arcmin', np.nan),
                     'minor_axis_arcmin': row.get('minor_axis_arcmin', np.nan),
                     'position_angle_deg': row.get('position_angle_deg', np.nan)
@@ -909,12 +912,22 @@ class StarTellerCLI:
         results_df['Position_Angle_deg'] = results_df['Object'].map(
             lambda x: self.dso_catalog.get(x, {}).get('position_angle_deg', np.nan)
         )
+        results_df['Constellation'] = results_df['Object'].map(
+            lambda x: self.dso_catalog.get(x, {}).get('constellation', '') or ''
+        )
+        results_df['V_Mag'] = results_df['Object'].map(
+            lambda x: self.dso_catalog.get(x, {}).get('v_mag', np.nan)
+        )
+        results_df['SurfBr'] = results_df['Object'].map(
+            lambda x: self.dso_catalog.get(x, {}).get('surf_br', np.nan)
+        )
         results_df['Timezone'] = local_tz_str
         
         # Reorder columns to user-specified order
         final_columns = [
-            'Object', 'Name', 'Type', 'Messier', 'Right_Ascension', 'Declination',
+            'Object', 'Name', 'Type', 'Messier', 'Constellation', 'Right_Ascension', 'Declination',
             'Major_Axis_arcmin', 'Minor_Axis_arcmin', 'Position_Angle_deg',
+            'V_Mag', 'SurfBr',
             'Best_Date', 'Best_Time_Local', 'Max_Altitude_deg', 'Azimuth_deg',
             'Rise_Time_Local', 'Rise_Direction_deg', 'Set_Time_Local', 'Set_Direction_deg',
             'Observing_Duration_Hours', 'Visible_Nights_Per_Year',

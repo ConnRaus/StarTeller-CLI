@@ -297,6 +297,12 @@ def load_ngc_catalog():
             except (ValueError, TypeError):
                 return ''
         
+        # Constellation: NGC.csv and addendum use 'Const' (3-letter code, e.g. And, Peg)
+        constellation = df['Const'].fillna('').astype(str).str.strip() if 'Const' in df.columns else pd.Series('', index=df.index)
+        # V-Mag and SurfBr for brightness/surface brightness in output
+        v_mag = pd.to_numeric(df['V-Mag'], errors='coerce') if 'V-Mag' in df.columns else np.nan
+        surf_br = pd.to_numeric(df['SurfBr'], errors='coerce') if 'SurfBr' in df.columns else np.nan
+
         catalog_df = pd.DataFrame({
             'object_id': df['Name'].apply(normalize_messier_id),
             'name': df['Name'].apply(clean_name),
@@ -306,6 +312,9 @@ def load_ngc_catalog():
             'magnitude': df['magnitude'],
             'common_name': df['Common names'].fillna(''),
             'messier': df['M'].apply(format_messier),
+            'constellation': constellation,
+            'v_mag': v_mag,
+            'surf_br': surf_br,
             'major_axis_arcmin': pd.to_numeric(df['MajAx'], errors='coerce'),
             'minor_axis_arcmin': pd.to_numeric(df['MinAx'], errors='coerce'),
             'position_angle_deg': pd.to_numeric(df['PosAng'], errors='coerce')
