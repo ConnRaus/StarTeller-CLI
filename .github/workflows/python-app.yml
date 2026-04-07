@@ -43,7 +43,7 @@ jobs:
       - name: Create required directories
         run: |
           mkdir -p data
-          mkdir -p user_data/cache
+          mkdir -p user_data
           mkdir -p output
 
       - name: Download test data

@@ -44,7 +44,7 @@ python src/starteller_cli.py
 3. Set minimum altitude and optional direction filter
 4. Get a CSV with optimal viewing times for ~13,000 deep sky objects
 
-The first run downloads the NGC catalog and Addendum (~4MB) and calculates night darkness times for the year. Both are cached, so subsequent runs are fast.
+The first run downloads the NGC catalog and Addendum (~4MB). Night darkness times are computed each run from your location and date range.
 
 ## Output
 
@@ -111,7 +111,7 @@ Data and settings are stored in platform-specific directories:
 **Linux:** `~/.local/share/starteller-cli/`  
 **macOS:** `~/Library/Application Support/StarTeller-CLI/`
 
-This includes the NGC catalog, your saved location, and output directory preference. Cache (night calculations) goes to the platform's cache directory. Output CSVs go to your configured output directory (default: `./starteller_output/`).
+This includes the NGC catalog, your saved location, and output directory preference. Output CSVs go to your configured output directory (default: `./starteller_output/`).
 
 ## Requirements
 

@@ -31,18 +31,6 @@ def get_user_data_dir():
         return Path.home() / '.local' / 'share' / 'starteller-cli'
 
 
-def get_cache_dir():
-    if sys.platform == 'win32':
-        # Windows: %LOCALAPPDATA%\StarTeller-CLI\cache
-        return get_user_data_dir() / 'cache'
-    elif sys.platform == 'darwin':
-        # macOS: ~/Library/Caches/StarTeller-CLI
-        return Path.home() / 'Library' / 'Caches' / 'StarTeller-CLI'
-    else:
-        # Linux: ~/.cache/starteller-cli
-        return Path.home() / '.cache' / 'starteller-cli'
-
-
 def get_output_dir():
     """Get the output directory, using saved preference if available."""
     saved_dir = load_output_dir()
@@ -559,48 +547,28 @@ class StarTellerCLI:
             self.local_tz = pytz.UTC
             print("✓ Timezone: UTC (could not auto-detect)")
         
-        # Load catalog
-        self.dso_catalog = self.setup_dso_catalog()
+        # Load catalog (DataFrame from catalog_manager; keep as DataFrame end-to-end)
+        self.catalog_df = self.setup_dso_catalog()
 
     def setup_dso_catalog(self):
-        # Returns catalog dictionary
         try:
-            # Load NGC catalog
             catalog_df = load_ngc_catalog()
-            
+
             if catalog_df.empty:
                 print("Failed to load NGC catalog - please ensure NGC.csv file is present")
-                return {}
-            
-            # Dict keyed by object_id for O(1) lookup when enriching the results table
-            catalog_dict = {}
-            for _, row in catalog_df.iterrows():
-                obj_id = row['object_id']
-                
-                # Use common name if available, otherwise use name
-                display_name = row.get('common_name', '') or row['name']
-                
-                catalog_dict[obj_id] = {
-                    'ra': float(row['ra_deg']),
-                    'dec': float(row['dec_deg']),
-                    'name': display_name,
-                    'type': row['type'],
-                    'messier': row.get('messier', ''),
-                    'constellation': row.get('constellation', '') or '',
-                    'v_mag': row.get('v_mag', np.nan),
-                    'surf_br': row.get('surf_br', np.nan),
-                    'major_axis_arcmin': row.get('major_axis_arcmin', np.nan),
-                    'minor_axis_arcmin': row.get('minor_axis_arcmin', np.nan),
-                    'position_angle_deg': row.get('position_angle_deg', np.nan)
-                }
-            
-            print(f"✓ Catalog: {len(catalog_dict)} objects loaded")
-            return catalog_dict
-            
+                return pd.DataFrame()
+
+            out = catalog_df.copy()
+            cc = out["common_name"].fillna("").astype(str).str.strip()
+            out["display_name"] = np.where(cc != "", cc, out["name"].astype(str))
+
+            print(f"✓ Catalog: {len(out)} objects loaded")
+            return out
+
         except Exception as e:
             print(f"Error loading catalog: {e}")
             print("Please ensure NGC.csv file is downloaded from OpenNGC")
-            return {}
+            return pd.DataFrame()
     
     # ============================================================================
     # NIGHT MIDPOINT CALCULATION
@@ -670,13 +638,14 @@ class StarTellerCLI:
         if direction_filter:
             print(f"Direction filter: {direction_filter[0]}° to {direction_filter[1]}° azimuth")
         
-        # Keep all catalog objects (including duplicate IDs at same coordinates, e.g. NGC3271 and IC2585)
-        items = list(self.dso_catalog.items())
+        # All rows preserved in row order (e.g. NGC 3271 vs IC 2585 remain separate rows)
+        df_work = self.catalog_df
         if messier_only:
-            items = [(k, v) for k, v in items if v.get('messier')]
-            print(f"Processing {len(items)} objects (Messier only)")
+            m = df_work["messier"].fillna("").astype(str).str.strip()
+            df_work = df_work[m != ""].reset_index(drop=True)
+            print(f"Processing {len(df_work)} objects (Messier only)")
         else:
-            print(f"Processing {len(items)} objects")
+            print(f"Processing {len(df_work)} objects")
         
         import time
         t_total_start = time.perf_counter()
@@ -720,18 +689,30 @@ class StarTellerCLI:
         # Precess coordinates from J2000.0 to current epoch
         # NGC.csv provides coordinates in J2000.0 epoch, but we need current epoch for accurate calculations
         print(f"Precessing coordinates from J2000.0 to epoch {epoch_date_str} (accounting for Earth's precession)...")
-        
-        # Prepare work items with both J2000 (for output) and precessed coordinates (for calculations)
-        work_items = []
-        for obj_id, obj_data in items:
-            ra_j2000 = obj_data['ra']
-            dec_j2000 = obj_data['dec']
-            # Precess from J2000.0 to current epoch for accurate calculations
-            ra_now, dec_now = precess_equatorial_j2000(ra_j2000, dec_j2000, mid_jd)
-            work_items.append(
-                (obj_id, ra_j2000, dec_j2000, ra_now, dec_now, obj_data['name'], obj_data['type'],
-                 obj_data.get('messier', ''), min_altitude, direction_filter)
+
+        ra_j2000 = df_work["ra_deg"].to_numpy(dtype=np.float64, copy=False)
+        dec_j2000 = df_work["dec_deg"].to_numpy(dtype=np.float64, copy=False)
+        ra_now, dec_now = precess_equatorial_j2000(ra_j2000, dec_j2000, mid_jd)
+
+        messier_col = df_work["messier"].fillna("").astype(str).to_numpy()
+        object_ids = df_work["object_id"].to_numpy()
+        display_names = df_work["display_name"].to_numpy()
+        types = df_work["type"].to_numpy()
+        work_items = [
+            (
+                object_ids[i],
+                float(ra_j2000[i]),
+                float(dec_j2000[i]),
+                float(ra_now[i]),
+                float(dec_now[i]),
+                display_names[i],
+                types[i],
+                messier_col[i],
+                min_altitude,
+                direction_filter,
             )
+            for i in range(len(df_work))
+        ]
         
         results = []
         columns = ['Object', 'Name', 'Type', 'Messier', 'Right_Ascension', 'Declination', 'Best_Date', 'Best_Time_Local',
@@ -744,34 +725,26 @@ class StarTellerCLI:
             self.latitude, self.longitude, t_array_data, night_dates_tuples,
             night_midpoint_ts, night_dark_start_ts, night_dark_end_ts, local_tz_str,
         )
-        for item in tqdm(work_items, total=len(work_items), desc=f"Processing {len(items)} objects", unit="obj"):
+        for item in tqdm(work_items, total=len(work_items), desc=f"Processing {len(df_work)} objects", unit="obj"):
             results.append(compute_catalog_object_viewing(ctx, item))
         
         print(f"✓ Processing completed in {time.perf_counter() - t_total_start:.2f}s")
         
-        # Convert tuple results to DataFrame
+        # Convert tuple results to DataFrame (same row order as df_work)
         results_df = pd.DataFrame(results, columns=columns)
-        
-        # Add angular size columns from catalog
-        results_df['Major_Axis_arcmin'] = results_df['Object'].map(
-            lambda x: self.dso_catalog.get(x, {}).get('major_axis_arcmin', np.nan)
+
+        extra = pd.DataFrame(
+            {
+                "Major_Axis_arcmin": df_work["major_axis_arcmin"].to_numpy(copy=False),
+                "Minor_Axis_arcmin": df_work["minor_axis_arcmin"].to_numpy(copy=False),
+                "Position_Angle_deg": df_work["position_angle_deg"].to_numpy(copy=False),
+                "Constellation": df_work["constellation"].fillna("").to_numpy(),
+                "V_Mag": df_work["v_mag"].to_numpy(copy=False),
+                "SurfBr": df_work["surf_br"].to_numpy(copy=False),
+            }
         )
-        results_df['Minor_Axis_arcmin'] = results_df['Object'].map(
-            lambda x: self.dso_catalog.get(x, {}).get('minor_axis_arcmin', np.nan)
-        )
-        results_df['Position_Angle_deg'] = results_df['Object'].map(
-            lambda x: self.dso_catalog.get(x, {}).get('position_angle_deg', np.nan)
-        )
-        results_df['Constellation'] = results_df['Object'].map(
-            lambda x: self.dso_catalog.get(x, {}).get('constellation', '') or ''
-        )
-        results_df['V_Mag'] = results_df['Object'].map(
-            lambda x: self.dso_catalog.get(x, {}).get('v_mag', np.nan)
-        )
-        results_df['SurfBr'] = results_df['Object'].map(
-            lambda x: self.dso_catalog.get(x, {}).get('surf_br', np.nan)
-        )
-        results_df['Timezone'] = local_tz_str
+        results_df = pd.concat([results_df, extra], axis=1)
+        results_df["Timezone"] = local_tz_str
         
         # Reorder columns to user-specified order
         final_columns = [
@@ -910,23 +883,15 @@ def get_user_location():
     return latitude, longitude
 
 def run_clean():
-    """Remove all user data and cache (NGC.csv, addendum.csv, location, output pref, cache files) for a fresh run."""
+    """Remove user data (NGC.csv, addendum.csv, saved location, output preference) for a fresh run."""
     user_data_dir = get_user_data_dir()
-    cache_dir = get_cache_dir()
-    removed = []
-    if cache_dir.exists():
-        shutil.rmtree(cache_dir)
-        removed.append(str(cache_dir))
     if user_data_dir.exists():
         shutil.rmtree(user_data_dir)
-        removed.append(str(user_data_dir))
-    if removed:
-        print("StarTeller-CLI --clean: Removed user data and cache:")
-        for path in removed:
-            print(f"  ✓ {path}")
+        print("StarTeller-CLI --clean: Removed user data:")
+        print(f"  ✓ {user_data_dir}")
         print("Next run will prompt for location and re-download NGC.csv and addendum.csv as needed.")
     else:
-        print("StarTeller-CLI --clean: No user data or cache directories found (already clean).")
+        print("StarTeller-CLI --clean: No user data directory found (already clean).")
 
 
 def main():
