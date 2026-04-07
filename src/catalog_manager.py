@@ -303,27 +303,34 @@ def load_ngc_catalog():
         v_mag = pd.to_numeric(df['V-Mag'], errors='coerce') if 'V-Mag' in df.columns else np.nan
         surf_br = pd.to_numeric(df['SurfBr'], errors='coerce') if 'SurfBr' in df.columns else np.nan
 
+        common_raw = df['Common names'].fillna('').astype(str).str.strip()
+        catalog_name = df['Name'].apply(clean_name)
+        # Match final CSV: Name is the friendly label (common name if present, else designation)
+        display_name = np.where(common_raw != '', common_raw, catalog_name.astype(str))
+
+        # Column names align with StarTeller-CLI CSV output where the same field exists.
         catalog_df = pd.DataFrame({
-            'object_id': df['Name'].apply(normalize_messier_id),
-            'name': df['Name'].apply(clean_name),
-            'ra_deg': df['ra_deg'],
-            'dec_deg': df['dec_deg'],
-            'type': df['expanded_type'],
-            'magnitude': df['magnitude'],
-            'common_name': df['Common names'].fillna(''),
-            'messier': df['M'].apply(format_messier),
-            'constellation': constellation,
-            'v_mag': v_mag,
-            'surf_br': surf_br,
-            'major_axis_arcmin': pd.to_numeric(df['MajAx'], errors='coerce'),
-            'minor_axis_arcmin': pd.to_numeric(df['MinAx'], errors='coerce'),
-            'position_angle_deg': pd.to_numeric(df['PosAng'], errors='coerce')
+            'Object': df['Name'].apply(normalize_messier_id),
+            'Catalog_Name': catalog_name,
+            'Name': display_name,
+            'Right_Ascension': df['ra_deg'],
+            'Declination': df['dec_deg'],
+            'Type': df['expanded_type'],
+            'Magnitude': df['magnitude'],
+            'Common_Name': common_raw,
+            'Messier': df['M'].apply(format_messier),
+            'Constellation': constellation,
+            'V_Mag': v_mag,
+            'SurfBr': surf_br,
+            'Major_Axis_arcmin': pd.to_numeric(df['MajAx'], errors='coerce'),
+            'Minor_Axis_arcmin': pd.to_numeric(df['MinAx'], errors='coerce'),
+            'Position_Angle_deg': pd.to_numeric(df['PosAng'], errors='coerce')
         })
         
         # Filter to reasonable coordinate ranges
         catalog_df = catalog_df[
-            (catalog_df['ra_deg'] >= 0) & (catalog_df['ra_deg'] <= 360) &
-            (catalog_df['dec_deg'] >= -90) & (catalog_df['dec_deg'] <= 90)
+            (catalog_df['Right_Ascension'] >= 0) & (catalog_df['Right_Ascension'] <= 360) &
+            (catalog_df['Declination'] >= -90) & (catalog_df['Declination'] <= 90)
         ]
         
         return catalog_df

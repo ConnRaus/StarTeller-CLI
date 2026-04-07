@@ -96,8 +96,10 @@ class TestStarTellerCLICatalog(unittest.TestCase):
         self.assertIsInstance(catalog, pd.DataFrame)
         self.assertGreater(len(catalog), 0)
         
-        # Should have required columns
-        required_columns = ['object_id', 'name', 'ra_deg', 'dec_deg', 'type', 'messier']
+        # Should have required columns (names match final viewing-times CSV where applicable)
+        required_columns = [
+            'Object', 'Name', 'Right_Ascension', 'Declination', 'Type', 'Messier',
+        ]
         for col in required_columns:
             self.assertIn(col, catalog.columns)
     
@@ -106,11 +108,11 @@ class TestStarTellerCLICatalog(unittest.TestCase):
         catalog = load_ngc_catalog()
         
         # Find objects with Messier designations
-        messier_objects = catalog[catalog['messier'].notna() & (catalog['messier'] != '')]
+        messier_objects = catalog[catalog['Messier'].notna() & (catalog['Messier'] != '')]
         
         if not messier_objects.empty:
             # Messier field should be formatted like "M31", "M42", etc.
-            for m_val in messier_objects['messier'].head(10):
+            for m_val in messier_objects['Messier'].head(10):
                 self.assertTrue(m_val.startswith('M'), f"Messier value '{m_val}' should start with 'M'")
     
     def test_angular_size_columns(self):
@@ -118,18 +120,18 @@ class TestStarTellerCLICatalog(unittest.TestCase):
         catalog = load_ngc_catalog()
         
         # Should have angular size columns
-        angular_size_columns = ['major_axis_arcmin', 'minor_axis_arcmin', 'position_angle_deg']
+        angular_size_columns = ['Major_Axis_arcmin', 'Minor_Axis_arcmin', 'Position_Angle_deg']
         for col in angular_size_columns:
             self.assertIn(col, catalog.columns)
         
         # Some objects should have angular size data (not all NaN)
         # Large galaxies like M31 should have major axis data
-        m31_candidates = catalog[catalog['messier'] == 'M31']
+        m31_candidates = catalog[catalog['Messier'] == 'M31']
         if not m31_candidates.empty:
             m31 = m31_candidates.iloc[0]
             # M31 (Andromeda) has a major axis of about 190 arcmin
             self.assertTrue(
-                pd.notna(m31['major_axis_arcmin']),
+                pd.notna(m31['Major_Axis_arcmin']),
                 "M31 should have major axis data"
             )
 

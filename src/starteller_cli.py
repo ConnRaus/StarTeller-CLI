@@ -558,9 +558,8 @@ class StarTellerCLI:
                 print("Failed to load NGC catalog - please ensure NGC.csv file is present")
                 return pd.DataFrame()
 
+            # load_ngc_catalog uses the same column names as the final viewing-times CSV where fields match.
             out = catalog_df.copy()
-            cc = out["common_name"].fillna("").astype(str).str.strip()
-            out["display_name"] = np.where(cc != "", cc, out["name"].astype(str))
 
             print(f"✓ Catalog: {len(out)} objects loaded")
             return out
@@ -641,7 +640,7 @@ class StarTellerCLI:
         # All rows preserved in row order (e.g. NGC 3271 vs IC 2585 remain separate rows)
         df_work = self.catalog_df
         if messier_only:
-            m = df_work["messier"].fillna("").astype(str).str.strip()
+            m = df_work["Messier"].fillna("").astype(str).str.strip()
             df_work = df_work[m != ""].reset_index(drop=True)
             print(f"Processing {len(df_work)} objects (Messier only)")
         else:
@@ -690,14 +689,14 @@ class StarTellerCLI:
         # NGC.csv provides coordinates in J2000.0 epoch, but we need current epoch for accurate calculations
         print(f"Precessing coordinates from J2000.0 to epoch {epoch_date_str} (accounting for Earth's precession)...")
 
-        ra_j2000 = df_work["ra_deg"].to_numpy(dtype=np.float64, copy=False)
-        dec_j2000 = df_work["dec_deg"].to_numpy(dtype=np.float64, copy=False)
+        ra_j2000 = df_work["Right_Ascension"].to_numpy(dtype=np.float64, copy=False)
+        dec_j2000 = df_work["Declination"].to_numpy(dtype=np.float64, copy=False)
         ra_now, dec_now = precess_equatorial_j2000(ra_j2000, dec_j2000, mid_jd)
 
-        messier_col = df_work["messier"].fillna("").astype(str).to_numpy()
-        object_ids = df_work["object_id"].to_numpy()
-        display_names = df_work["display_name"].to_numpy()
-        types = df_work["type"].to_numpy()
+        messier_col = df_work["Messier"].fillna("").astype(str).to_numpy()
+        object_ids = df_work["Object"].to_numpy()
+        display_names = df_work["Name"].to_numpy()
+        types = df_work["Type"].to_numpy()
         work_items = [
             (
                 object_ids[i],
@@ -735,12 +734,12 @@ class StarTellerCLI:
 
         extra = pd.DataFrame(
             {
-                "Major_Axis_arcmin": df_work["major_axis_arcmin"].to_numpy(copy=False),
-                "Minor_Axis_arcmin": df_work["minor_axis_arcmin"].to_numpy(copy=False),
-                "Position_Angle_deg": df_work["position_angle_deg"].to_numpy(copy=False),
-                "Constellation": df_work["constellation"].fillna("").to_numpy(),
-                "V_Mag": df_work["v_mag"].to_numpy(copy=False),
-                "SurfBr": df_work["surf_br"].to_numpy(copy=False),
+                "Major_Axis_arcmin": df_work["Major_Axis_arcmin"].to_numpy(copy=False),
+                "Minor_Axis_arcmin": df_work["Minor_Axis_arcmin"].to_numpy(copy=False),
+                "Position_Angle_deg": df_work["Position_Angle_deg"].to_numpy(copy=False),
+                "Constellation": df_work["Constellation"].fillna("").to_numpy(),
+                "V_Mag": df_work["V_Mag"].to_numpy(copy=False),
+                "SurfBr": df_work["SurfBr"].to_numpy(copy=False),
             }
         )
         results_df = pd.concat([results_df, extra], axis=1)
