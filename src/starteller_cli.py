@@ -634,6 +634,9 @@ class StarTellerCLI:
                     'name': display_name,
                     'type': row['type'],
                     'messier': row.get('messier', ''),
+                    'constellation': row.get('constellation', '') or '',
+                    'v_mag': row.get('v_mag', np.nan),
+                    'surf_br': row.get('surf_br', np.nan),
                     'major_axis_arcmin': row.get('major_axis_arcmin', np.nan),
                     'minor_axis_arcmin': row.get('minor_axis_arcmin', np.nan),
                     'position_angle_deg': row.get('position_angle_deg', np.nan)
@@ -791,11 +794,11 @@ class StarTellerCLI:
     # MAIN FUNCTIONALITY
     # ============================================================================
     
-    def find_optimal_viewing_times(self, min_altitude=20, direction_filter=None):
+    def find_optimal_viewing_times(self, min_altitude=20, direction_filter=None, messier_only=False):
         """
         Find optimal viewing times for all objects in the catalog
         
-        Takes *minimum altitude in degrees, *direction filter (tuple)
+        Takes *minimum altitude in degrees, *direction filter (tuple), *messier_only (bool)
         Returns pandas final result dataframe
         """
         print("Calculating optimal viewing times for deep sky objects...")
@@ -809,7 +812,11 @@ class StarTellerCLI:
         
         # Keep all catalog objects (including duplicate IDs at same coordinates, e.g. NGC3271 and IC2585)
         items = list(self.dso_catalog.items())
-        print(f"Processing {len(items)} objects")
+        if messier_only:
+            items = [(k, v) for k, v in items if v.get('messier')]
+            print(f"Processing {len(items)} objects (Messier only)")
+        else:
+            print(f"Processing {len(items)} objects")
         
         import time
         t_total_start = time.perf_counter()
@@ -905,12 +912,22 @@ class StarTellerCLI:
         results_df['Position_Angle_deg'] = results_df['Object'].map(
             lambda x: self.dso_catalog.get(x, {}).get('position_angle_deg', np.nan)
         )
+        results_df['Constellation'] = results_df['Object'].map(
+            lambda x: self.dso_catalog.get(x, {}).get('constellation', '') or ''
+        )
+        results_df['V_Mag'] = results_df['Object'].map(
+            lambda x: self.dso_catalog.get(x, {}).get('v_mag', np.nan)
+        )
+        results_df['SurfBr'] = results_df['Object'].map(
+            lambda x: self.dso_catalog.get(x, {}).get('surf_br', np.nan)
+        )
         results_df['Timezone'] = local_tz_str
         
         # Reorder columns to user-specified order
         final_columns = [
-            'Object', 'Name', 'Type', 'Messier', 'Right_Ascension', 'Declination',
+            'Object', 'Name', 'Type', 'Messier', 'Constellation', 'Right_Ascension', 'Declination',
             'Major_Axis_arcmin', 'Minor_Axis_arcmin', 'Position_Angle_deg',
+            'V_Mag', 'SurfBr',
             'Best_Date', 'Best_Time_Local', 'Max_Altitude_deg', 'Azimuth_deg',
             'Rise_Time_Local', 'Rise_Direction_deg', 'Set_Time_Local', 'Set_Direction_deg',
             'Observing_Duration_Hours', 'Visible_Nights_Per_Year',
@@ -1064,6 +1081,9 @@ def run_clean():
 
 def main():
     """Main function to run StarTeller-CLI."""
+    # Hidden flag: only calculate Messier objects (not shown in help / user-facing CLI)
+    messier_only = "--messier-only" in sys.argv
+
     print("=" * 60)
     print("                   StarTeller-CLI")
     print("        Deep Sky Object Optimal Viewing Calculator")
@@ -1100,7 +1120,7 @@ def main():
         return
     
     # Calculate optimal viewing times
-    results = st.find_optimal_viewing_times(min_altitude=min_alt, direction_filter=direction_filter)
+    results = st.find_optimal_viewing_times(min_altitude=min_alt, direction_filter=direction_filter, messier_only=messier_only)
     
     # Save to output directory
     output_dir.mkdir(parents=True, exist_ok=True)
