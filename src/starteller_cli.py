@@ -1,17 +1,7 @@
 #!/usr/bin/env python3
-"""StarTeller-CLI (single-threaded reference)
-
-File layout follows the main path (see section headers). Rough call order:
-
-  main()
-    → get_user_location(), get_user_output_dir()
-    → StarTellerCLI.__init__() → setup_dso_catalog() → load_ngc_catalog() [catalog_manager]
-    → find_optimal_viewing_times()
-         → get_night_midpoints() → compute_year_night_midpoints() → sun_altitude_deg → …
-         → ObservationContext (LST + night arrays, once)
-         → precess_equatorial_j2000() on full catalog
-         → compute_catalog_object_viewing() per object
-         → DataFrame merge, sort, return (main writes CSV)
+"""
+StarTeller-CLI (single threaded)- Optimal Deep Sky Object Viewing Time Calculator
+A command-line tool to find the best times to observe deep sky objects throughout the year.
 """
 
 import os
@@ -192,7 +182,7 @@ def local_sidereal_time_rad(jd_array, longitude_deg):
     T = (jd_floor - 2451545.0) / 36525.0
 
     # GMST at midnight in degrees (Eq 12.3)
-    gmst_midnight = 100.46061837 + 36000.770053608 * T + 0.000387933 * T**2 - (T**3) / 38710000.0
+    gmst_midnight = 100.46061837 + (36000.770053608 * T) + (0.000387933 * T**2) - (T**3 / 38710000.0)
 
     # Add rotation for time since midnight (360.98564736629 deg per day = sidereal rate)
     gmst_deg = gmst_midnight + 360.98564736629 * day_fraction
@@ -278,7 +268,7 @@ def equatorial_to_horizontal_deg(ra_deg, dec_deg, lst_rad, lat_rad):
 
     # Convert to degrees
     alt_deg = np.rad2deg(alt_rad)
-    az_deg = np.rad2deg(az_rad) % 360.0  # Normalize to 0-360
+    az_deg = np.rad2deg(az_rad) % 360.0
 
     return alt_deg, az_deg
 
@@ -491,7 +481,7 @@ def compute_year_night_midpoints(args):
 
 
 class ObservationContext:
-    """Precomputed LST and night metadata shared while scanning the catalog (main thread only)."""
+    """Precomputed LST and night metadata shared while scanning the catalog"""
 
     __slots__ = (
         'latitude', 'longitude', 'lst_array', 'night_dates',
