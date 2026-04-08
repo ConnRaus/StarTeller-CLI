@@ -5,7 +5,8 @@ StarTeller-CLI Source Package
 Core source code for the StarTeller-CLI astrophotography planning tool.
 
 Modules:
-    starteller_cli: Main application with observation planning algorithms
+    starteller: Core observation math and StarTellerCLI (no CLI I/O)
+    starteller_cli: Interactive prompts, paths, and main()
     catalog_manager: NGC/IC catalog loading and management
 """
 
