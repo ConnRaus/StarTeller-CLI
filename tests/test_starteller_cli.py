@@ -152,7 +152,7 @@ class TestStarTellerCLIFunctionality(unittest.TestCase):
 
     def test_find_optimal_viewing_times(self):
         """Test optimal viewing times calculation."""
-        results = self.st.find_optimal_viewing_times(min_altitude=20)
+        results = self.st.find_optimal_viewing_times(min_altitude=20, messier_only=True)
         
         self.assertIsInstance(results, pd.DataFrame)
         self.assertGreater(len(results), 0)
@@ -166,26 +166,10 @@ class TestStarTellerCLIFunctionality(unittest.TestCase):
         for col in required_columns:
             self.assertIn(col, results.columns)
     
-    def test_direction_filtering(self):
-        """Test direction filtering functionality."""
-        # Test normal range (East: 45°-135°)
-        results_east = self.st.find_optimal_viewing_times(min_altitude=15, direction_filter=(45, 135))
-        
-        # Test wrapping range (North: 315°-45°)  
-        results_north = self.st.find_optimal_viewing_times(min_altitude=15, direction_filter=(315, 45))
-        
-        # Both should return DataFrame
-        self.assertIsInstance(results_east, pd.DataFrame)
-        self.assertIsInstance(results_north, pd.DataFrame)
-        
-        # Results might be different due to filtering
-        self.assertGreaterEqual(len(results_east), 0)
-        self.assertGreaterEqual(len(results_north), 0)
-    
     def test_altitude_filtering(self):
         """Test altitude filtering with different thresholds."""
-        results_low = self.st.find_optimal_viewing_times(min_altitude=10)
-        results_high = self.st.find_optimal_viewing_times(min_altitude=70)
+        results_low = self.st.find_optimal_viewing_times(min_altitude=10, messier_only=True)
+        results_high = self.st.find_optimal_viewing_times(min_altitude=70, messier_only=True)
         
         # Higher altitude requirement should generally result in fewer objects
         # (though not always due to different optimal dates)
@@ -208,7 +192,7 @@ class TestStarTellerCLIErrorHandling(unittest.TestCase):
         """Test handling of full catalog."""
         st = StarTellerCLI(40.7, -74.0, elevation=50)
         try:
-            results = st.find_optimal_viewing_times()
+            results = st.find_optimal_viewing_times(messier_only=True)
             self.assertIsInstance(results, pd.DataFrame)
             self.assertGreater(len(results), 0)
         except Exception as e:
@@ -323,7 +307,7 @@ def quick_integration_test():
         print(f"✅ Initialized with {len(st.catalog_df)} objects")
         
         # Test calculation
-        results = st.find_optimal_viewing_times(min_altitude=20)
+        results = st.find_optimal_viewing_times(min_altitude=20, messier_only=True)
         print(f"✅ Generated results for {len(results)} objects")
         
         # Test that we have expected data

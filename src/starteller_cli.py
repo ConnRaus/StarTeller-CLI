@@ -146,15 +146,15 @@ def _years_spanned(start_date, days):
     return {(start_date + timedelta(days=i)).year for i in range(days)}
 
 
-def find_optimal_viewing_times_with_messages(st, min_altitude=20, direction_filter=None, messier_only=False):
+def find_optimal_viewing_times_with_messages(st, min_altitude=20, messier_only=False):
     """Print status lines, then run the core pipeline once (nights computed a single time)."""
     print("Calculating optimal viewing times for deep sky objects...")
     print(f"Observer location: {st.latitude:.2f}°, {st.longitude:.2f}°")
     print(f"Local timezone: {st.local_tz}")
     print(f"Minimum altitude: {min_altitude}°")
     print("Dark time criteria: Sun below -18° (astronomical twilight)")
-    if direction_filter:
-        print(f"Direction filter: {direction_filter[0]}° to {direction_filter[1]}° azimuth")
+    print("Best night: longest time above your altitude limit during that dark period (tie → higher peak altitude)")
+    print("Visible nights: count of nights with any usable time in astro dark (not “only at dark midpoint”)")
 
     df_work = st.catalog_df
     if messier_only:
@@ -168,22 +168,22 @@ def find_optimal_viewing_times_with_messages(st, min_altitude=20, direction_filt
     days = 365
     print(f"Calculating night darkness times for {len(_years_spanned(start_date, days))} year(s)...")
     t_night = time.perf_counter()
-    night_midpoints = st.get_night_midpoints(start_date=start_date, days=days)
+    dark_windows = st.get_dark_windows(start_date=start_date, days=days)
     print(f"✓ Night calculations completed in {time.perf_counter() - t_night:.2f}s")
 
-    if night_midpoints:
-        _, mid_midpoint, _, _ = night_midpoints[len(night_midpoints) // 2]
-        epoch_date_str = mid_midpoint.strftime('%Y-%m-%d')
+    if dark_windows:
+        _, ds, de = dark_windows[len(dark_windows) // 2]
+        mid_ts = (ds.timestamp() + de.timestamp()) * 0.5
+        epoch_date_str = datetime.fromtimestamp(mid_ts, tz=st.local_tz).strftime('%Y-%m-%d')
     else:
         epoch_date_str = f"{date.today().year}-07-01"
     print(f"Precessing coordinates from J2000.0 to epoch {epoch_date_str} (accounting for Earth's precession)...")
 
     results = st.find_optimal_viewing_times(
         min_altitude=min_altitude,
-        direction_filter=direction_filter,
         messier_only=messier_only,
         use_tqdm=True,
-        night_midpoints=night_midpoints,
+        dark_windows=dark_windows,
     )
     print(f"✓ Processing completed in {time.perf_counter() - t_total_start:.2f}s")
     return results
@@ -214,15 +214,6 @@ def main():
     print("\nViewing preferences:")
     min_alt = float(input("Minimum altitude (degrees, default 20): ") or 20)
 
-    direction_input = input("Direction filter? (e.g., '90,180' for East-South, or Enter for no filter): ")
-    direction_filter = None
-    if direction_input.strip():
-        try:
-            min_az, max_az = map(float, direction_input.split(','))
-            direction_filter = (min_az, max_az)
-        except Exception:
-            print("Invalid direction format, proceeding without direction filter.")
-
     print("\n" + "=" * 60)
     print("PROCESSING...")
     print("=" * 60)
@@ -238,7 +229,7 @@ def main():
     print(f"✓ Catalog: {len(st.catalog_df)} objects loaded")
 
     results = find_optimal_viewing_times_with_messages(
-        st, min_altitude=min_alt, direction_filter=direction_filter, messier_only=messier_only
+        st, min_altitude=min_alt, messier_only=messier_only
     )
 
     output_dir.mkdir(parents=True, exist_ok=True)

@@ -2,7 +2,7 @@
 
 A comprehensive command-line tool for astrophotographers and telescope enthusiasts to find optimal viewing times for deep sky objects throughout the year.
 
-Given your location, StarTeller calculates when each object in the NGC/IC/Messier catalogs reaches its highest point during astronomical darkness. It accounts for altitude, direction, and dark sky conditions to help you plan observation sessions.
+Given your location, StarTeller calculates when each object in the NGC/IC/Messier catalogs reaches its highest point during astronomical darkness. It accounts for altitude and dark sky conditions to help you plan observation sessions.
 
 ## Installation
 
@@ -41,7 +41,7 @@ python src/starteller_cli.py
 
 1. Enter your coordinates (or use a saved location)
 2. Set your output directory (or use a saved preference)
-3. Set minimum altitude and optional direction filter
+3. Set minimum altitude
 4. Get a CSV with optimal viewing times for ~13,000 deep sky objects
 
 The first run downloads the NGC catalog and Addendum (~4MB). Night darkness times are computed each run from your location and date range.
@@ -70,7 +70,7 @@ Results go to `starteller_output/` by default, or a custom directory you set on 
 | Set_Time_Local           | When it drops below minimum altitude         |
 | Set_Direction_deg        | Azimuth when setting                         |
 | Observing_Duration_Hours | Total time above minimum altitude            |
-| Visible_Nights_Per_Year  | Nights meeting altitude/direction criteria   |
+| Visible_Nights_Per_Year  | Nights with any time above min altitude in astro dark |
 | Dark_Start_Local         | Start of astronomical darkness               |
 | Dark_End_Local           | End of astronomical darkness                 |
 | Timezone                 | Timezone used for local times                |
@@ -100,7 +100,7 @@ st = StarTellerCLI(
 )
 
 results = st.find_optimal_viewing_times(min_altitude=25)
-results = st.find_optimal_viewing_times(direction_filter=(90, 180))  # East to South
+results = st.find_optimal_viewing_times(min_altitude=25)
 ```
 
 ## File locations
