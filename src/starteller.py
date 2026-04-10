@@ -87,32 +87,13 @@ def precess_equatorial_j2000(ra_j2000_deg, dec_j2000_deg, jd_target):
     return ra_new_deg, dec_new_deg
 
 
-def _lst_rad_from_jd_scalar(jd, longitude_deg):
-    """Local sidereal time (rad) for scalar Julian date; same model as local_sidereal_time_rad."""
-    jd_floor = np.floor(jd - 0.5) + 0.5
-    day_fraction = jd - jd_floor
-    T = (jd_floor - 2451545.0) / 36525.0
-    gmst_midnight = 100.46061837 + (36000.770053608 * T) + (0.000387933 * T**2) - (T**3 / 38710000.0)
-    gmst_deg = gmst_midnight + 360.98564736629 * day_fraction
-    lst_deg = (gmst_deg + longitude_deg) % 360.0
-    return np.deg2rad(lst_deg)
+def altitude_deg_at_unix_ts(ts_unix, ra_rad, dec_rad, lat_rad, lon_deg):
+    """
+    Calculate topocentric altitude (vectorized).
 
-
-def _alt_deg_at_ts_scalar(ts_unix, ra_rad, dec_rad, lat_rad, lon_deg):
-    """Topocentric altitude (deg) at one Unix time; same spherical model as the vector/matrix paths."""
-    jd = float(ts_unix) / 86400.0 + 2440587.5
-    lst_rad = float(_lst_rad_from_jd_scalar(jd, lon_deg))
-    ha_rad = lst_rad - float(ra_rad)
-    sin_alt = float(
-        np.sin(dec_rad) * np.sin(lat_rad)
-        + np.cos(dec_rad) * np.cos(lat_rad) * np.cos(ha_rad)
-    )
-    sin_alt = max(-1.0, min(1.0, sin_alt))
-    return float(np.rad2deg(np.arcsin(sin_alt)))
-
-
-def _alt_deg_at_ts_batch(ts_unix, ra_rad, dec_rad, lat_rad, lon_deg):
-    """Topocentric altitude (deg); ``ts_unix`` and ``ra_rad`` / ``dec_rad`` same leading shape (vectorized LST)."""
+    Takes: Unix timestamp(s), RA/Dec in radians (same leading shape as timestamps), latitude in radians, longitude in degrees
+    Returns: Altitude(s) in degrees
+    """
     jd = np.asarray(ts_unix, dtype=np.float64) / 86400.0 + 2440587.5
     lst = local_sidereal_time_rad(jd, lon_deg)
     ra = np.asarray(ra_rad, dtype=np.float64)
@@ -123,18 +104,13 @@ def _alt_deg_at_ts_batch(ts_unix, ra_rad, dec_rad, lat_rad, lon_deg):
     return np.rad2deg(np.arcsin(sin_alt))
 
 
-def _alt_deg_shared_unix_ts(ts_scalar, ra_rad, dec_rad, lat_rad, lon_deg):
-    """Altitude (deg) for many objects at one Unix time (single LST solve, then vector HA)."""
-    jd = float(ts_scalar) / 86400.0 + 2440587.5
-    lst0 = _lst_rad_from_jd_scalar(jd, lon_deg)
-    ha = lst0 - ra_rad
-    sin_alt = np.sin(dec_rad) * np.sin(lat_rad) + np.cos(dec_rad) * np.cos(lat_rad) * np.cos(ha)
-    sin_alt = np.clip(sin_alt, -1.0, 1.0)
-    return np.rad2deg(np.arcsin(sin_alt))
+def altitude_azimuth_deg_at_unix_ts(t_vec, ra_vec, dec_vec, lat_rad, lon_deg):
+    """
+    Calculate altitude and azimuth (vectorized).
 
-
-def _alt_az_deg_vector_ts(t_vec, ra_vec, dec_vec, lat_rad, lon_deg):
-    """Altitude and azimuth (deg); vectorized topocentric transform (same spherical model as ``equatorial_to_horizontal_deg``)."""
+    Takes: Unix timestamp(s), RA/Dec in radians, latitude in radians, longitude in degrees
+    Returns: (alt_deg, az_deg) arrays in degrees
+    """
     jd = np.asarray(t_vec, dtype=np.float64) / 86400.0 + 2440587.5
     lst = local_sidereal_time_rad(jd, lon_deg)
     ha = lst - ra_vec
@@ -151,25 +127,6 @@ def _alt_az_deg_vector_ts(t_vec, ra_vec, dec_vec, lat_rad, lon_deg):
     cos_az = (sdec - slat * np.sin(alt_rad)) / (clat * cos_alt)
     az_rad = np.arctan2(sin_az, cos_az)
     return np.rad2deg(alt_rad), np.rad2deg(az_rad) % 360.0
-
-
-def _ternary_search_peak_times_batch(seg_ta, seg_tb, ra_vec, dec_vec, lat_rad, lon_deg, n_iter=50):
-    """Vector ternary search for time of maximum altitude on each [seg_ta, seg_tb]; returns peak Unix times."""
-    lo = np.asarray(seg_ta, dtype=np.float64).copy()
-    hi = np.asarray(seg_tb, dtype=np.float64).copy()
-    for _ in range(n_iter):
-        span = hi - lo
-        active = span >= 0.25
-        if not np.any(active):
-            break
-        t1 = lo + span / 3.0
-        t2 = hi - span / 3.0
-        a1 = _alt_deg_at_ts_batch(t1, ra_vec, dec_vec, lat_rad, lon_deg)
-        a2 = _alt_deg_at_ts_batch(t2, ra_vec, dec_vec, lat_rad, lon_deg)
-        move_lo = active & (a1 < a2)
-        lo = np.where(move_lo, t1, lo)
-        hi = np.where(active & ~move_lo, t2, hi)
-    return 0.5 * (lo + hi)
 
 
 def equatorial_to_horizontal_deg(ra_deg, dec_deg, lst_rad, lat_rad):
@@ -212,66 +169,19 @@ def equatorial_to_horizontal_deg(ra_deg, dec_deg, lst_rad, lat_rad):
 # 3. Sun position & astronomical-dark windows (smooth alt(ts); roots at −18°)
 # -------------------------------------------------------------------------------------
 
-def sun_equatorial_deg(jd_array):
+def sun_equatorial_deg(jd):
     """
-    Calculate sun's RA and Dec for an array of julian dates.
+    Calculate the Sun's RA and Dec.
     Equations from https://aa.usno.navy.mil/faq/sun_approx
 
-    Takes: numpy array of julian dates
-    Returns: numpy arrays of sun RA and Dec in degrees
+    Takes: Julian date (scalar or numpy array)
+    Returns: (sun_ra_deg, sun_dec_deg) in degrees (scalar or numpy array)
     """
-    # Days since J2000.0
-    n = jd_array - 2451545.0
+    # NumPy math works on both scalars and arrays; we only branch at the end for output type.
+    is_scalar = np.isscalar(jd)
+    if is_scalar:
+        jd = float(jd)
 
-    # Mean anomaly of the Sun (degrees)
-    g = np.deg2rad((357.528 + 0.9856003 * n) % 360.0)
-
-    # Mean longitude of the Sun (degrees)
-    q = (280.459 + 0.985647436 * n) % 360.0
-
-    # Apprent ecliptic longitude of the Sun (degrees)
-    L = q + 1.915 * np.sin(g) + 0.020 * np.sin(2 * g)
-    L_rad = np.deg2rad(L)
-
-    # Obliquity of the ecliptic (degrees)
-    e = np.deg2rad(23.439 - 0.00000036 * n)
-
-    # Sun's Right Ascension
-    ra_rad = np.arctan2(np.cos(e) * np.sin(L_rad), np.cos(L_rad))
-    ra_deg = np.rad2deg(ra_rad) % 360.0
-
-    # Sun's Declination
-    dec_rad = np.arcsin(np.sin(e) * np.sin(L_rad))
-    dec_deg = np.rad2deg(dec_rad)
-
-    return ra_deg, dec_deg
-
-
-def sun_altitude_deg(jd_array, latitude, longitude):
-    """
-    Calculate sun altitude for an array of julian dates
-
-    Takes: numpy array of julian dates, lat(deg), long(deg)
-    Returns: numpy array of sun altitudes in degrees
-    """
-    # Get sun RA/Dec
-    sun_ra, sun_dec = sun_equatorial_deg(jd_array)
-
-    # Calculate Local Sidereal Time
-    lst_rad = local_sidereal_time_rad(jd_array, longitude)
-
-    # Calculate altitude
-    lat_rad = np.deg2rad(latitude)
-    alt_deg, _ = equatorial_to_horizontal_deg(sun_ra, sun_dec, lst_rad, lat_rad)
-
-    return alt_deg
-
-
-ASTRO_DARK_ALT_DEG = -18.0
-
-
-def _sun_equatorial_deg_scalar(jd):
-    """Sun RA/Dec (deg) for scalar Julian date; same low-precision model as sun_equatorial_deg."""
     n = jd - 2451545.0
     g = np.deg2rad((357.528 + 0.9856003 * n) % 360.0)
     q = (280.459 + 0.985647436 * n) % 360.0
@@ -280,44 +190,72 @@ def _sun_equatorial_deg_scalar(jd):
     e = np.deg2rad(23.439 - 0.00000036 * n)
     ra_rad = np.arctan2(np.cos(e) * np.sin(L_rad), np.cos(L_rad))
     dec_rad = np.arcsin(np.sin(e) * np.sin(L_rad))
-    return float(np.rad2deg(ra_rad) % 360.0), float(np.rad2deg(dec_rad))
+
+    ra_deg = np.rad2deg(ra_rad) % 360.0
+    dec_deg = np.rad2deg(dec_rad)
+    if is_scalar:
+        return float(ra_deg), float(dec_deg)
+    return ra_deg, dec_deg
 
 
-def _sun_altitude_deg_scalar(ts_unix, latitude, longitude):
-    """Sun altitude (deg) at Unix time; scalar path for root-finding without array allocations."""
-    jd = ts_unix / 86400.0 + 2440587.5
-    sun_ra_deg, sun_dec_deg = _sun_equatorial_deg_scalar(jd)
-    lst_rad = float(_lst_rad_from_jd_scalar(jd, longitude))
+def sun_altitude_deg(jd, latitude, longitude):
+    """
+    Calculate Sun altitude.
+
+    Takes: Julian date (scalar or numpy array), latitude(deg), longitude(deg)
+    Returns: Sun altitude in degrees (scalar or numpy array)
+    """
+    if np.isscalar(jd):
+        sun_ra_deg, sun_dec_deg = sun_equatorial_deg(float(jd))
+        lst_rad = float(local_sidereal_time_rad(float(jd), longitude))
+        lat_rad = float(np.deg2rad(latitude))
+        ra_rad = float(np.deg2rad(sun_ra_deg))
+        dec_rad = float(np.deg2rad(sun_dec_deg))
+        ha_rad = lst_rad - ra_rad
+        sin_alt = float(
+            np.sin(dec_rad) * np.sin(lat_rad)
+            + np.cos(dec_rad) * np.cos(lat_rad) * np.cos(ha_rad)
+        )
+        sin_alt = max(-1.0, min(1.0, sin_alt))
+        return float(np.rad2deg(np.arcsin(sin_alt)))
+
+    sun_ra, sun_dec = sun_equatorial_deg(jd)
+    lst_rad = local_sidereal_time_rad(jd, longitude)
     lat_rad = np.deg2rad(latitude)
-    ra_rad = np.deg2rad(sun_ra_deg)
-    dec_rad = np.deg2rad(sun_dec_deg)
-    ha_rad = lst_rad - float(ra_rad)
-    sin_alt = float(
-        np.sin(dec_rad) * np.sin(lat_rad)
-        + np.cos(dec_rad) * np.cos(lat_rad) * np.cos(ha_rad)
-    )
-    sin_alt = max(-1.0, min(1.0, sin_alt))
-    return float(np.rad2deg(np.arcsin(sin_alt)))
+    alt_deg, _ = equatorial_to_horizontal_deg(sun_ra, sun_dec, lst_rad, lat_rad)
+    return alt_deg
 
 
-def _scalar_sun_alt_minus(ts_unix, latitude, longitude, target_alt=ASTRO_DARK_ALT_DEG):
-    return _sun_altitude_deg_scalar(ts_unix, latitude, longitude) - target_alt
+ASTRO_DARK_ALT_DEG = -18.0
 
 
-def _bisect_sun_alt_crossing(ts_lo, ts_hi, latitude, longitude, target_alt=ASTRO_DARK_ALT_DEG):
+def sun_altitude_minus_target(ts_unix, latitude, longitude, target_alt=ASTRO_DARK_ALT_DEG):
     """
-    Unix timestamp in [ts_lo, ts_hi] where sun altitude == target_alt.
-    Requires ts_lo < ts_hi and (alt(ts_lo)-target) * (alt(ts_hi)-target) <= 0.
+    Helper for root finding on Sun altitude.
+
+    Takes: Unix timestamp (seconds), latitude(deg), longitude(deg), target altitude (deg)
+    Returns: sun_altitude_deg(ts) - target_alt
     """
-    flo = _scalar_sun_alt_minus(ts_lo, latitude, longitude, target_alt)
-    fhi = _scalar_sun_alt_minus(ts_hi, latitude, longitude, target_alt)
+    jd = ts_unix / 86400.0 + 2440587.5
+    return float(sun_altitude_deg(jd, latitude, longitude)) - target_alt
+
+
+def bisect_sun_altitude_crossing(ts_lo, ts_hi, latitude, longitude, target_alt=ASTRO_DARK_ALT_DEG):
+    """
+    Find the time where Sun altitude == target_alt using bisection.
+
+    Takes: two Unix timestamps bracketing a crossing, latitude(deg), longitude(deg), target altitude (deg)
+    Returns: Unix timestamp (seconds)
+    """
+    flo = sun_altitude_minus_target(ts_lo, latitude, longitude, target_alt)
+    fhi = sun_altitude_minus_target(ts_hi, latitude, longitude, target_alt)
     if flo * fhi > 0:
         return 0.5 * (ts_lo + ts_hi)
     lo, hi = float(ts_lo), float(ts_hi)
     fl, fh = flo, fhi
     for _ in range(32):
         m = 0.5 * (lo + hi)
-        fm = _scalar_sun_alt_minus(m, latitude, longitude, target_alt)
+        fm = sun_altitude_minus_target(m, latitude, longitude, target_alt)
         if fl * fm <= 0:
             hi, fh = m, fm
         else:
@@ -325,12 +263,12 @@ def _bisect_sun_alt_crossing(ts_lo, ts_hi, latitude, longitude, target_alt=ASTRO
     return 0.5 * (lo + hi)
 
 
-def _dark_window_local_noon_day(check_date, latitude, longitude, local_tz, n_scan=33):
+def dark_window_local_noon_day(check_date, latitude, longitude, local_tz, n_scan=33):
     """
-    Astronomical dark (Sun altitude < ASTRO_DARK_ALT_DEG) within one local
-    **noon → next noon** span. Same sun model as sun_altitude_deg (smooth in time).
+    Find the longest astronomical-dark window for one local date.
 
-    Returns (dark_start_ts, dark_end_ts) unix floats, or None if no darkness.
+    Takes: local date, latitude(deg), longitude(deg), timezone, scan points
+    Returns: (dark_start_ts, dark_end_ts) Unix timestamps, or None if no darkness
     """
     t0 = local_tz.localize(datetime.combine(check_date, time(12, 0))).timestamp()
     next_day = check_date + timedelta(days=1)
@@ -353,7 +291,7 @@ def _dark_window_local_noon_day(check_date, latitude, longitude, local_tz, n_sca
         if f[i] == 0.0:
             roots.append(float(ts[i]))
         elif f[i] * f[i + 1] < 0.0:
-            r = _bisect_sun_alt_crossing(float(ts[i]), float(ts[i + 1]), latitude, longitude, ASTRO_DARK_ALT_DEG)
+            r = bisect_sun_altitude_crossing(float(ts[i]), float(ts[i + 1]), latitude, longitude, ASTRO_DARK_ALT_DEG)
             roots.append(r)
 
     roots = sorted(roots)
@@ -365,7 +303,7 @@ def _dark_window_local_noon_day(check_date, latitude, longitude, local_tz, n_sca
         if tb - ta < 1e-6:
             continue
         mid = 0.5 * (ta + tb)
-        if _scalar_sun_alt_minus(mid, latitude, longitude, ASTRO_DARK_ALT_DEG) < 0.0:
+        if sun_altitude_minus_target(mid, latitude, longitude, ASTRO_DARK_ALT_DEG) < 0.0:
             span = tb - ta
             if span > best_span:
                 best_span = span
@@ -404,7 +342,7 @@ def compute_year_dark_windows(args):
 
         for day_offset in range(full_year_days):
             check_date = full_year_start + timedelta(days=day_offset)
-            span = _dark_window_local_noon_day(check_date, latitude, longitude, local_tz)
+            span = dark_window_local_noon_day(check_date, latitude, longitude, local_tz)
             if span is None:
                 continue
             dark_start_ts, dark_end_ts = span
@@ -438,279 +376,18 @@ class ObservationContext:
         self.night_dark_end_ts = np.asarray(night_dark_end_ts, dtype=np.float64)
 
 
-def _bisect_altitude_equals(ts_lo, ts_hi, ra_rad, dec_rad, lat_rad, lon_deg, h_deg, max_iter=56):
-    """Unix time where altitude equals h_deg on [ts_lo, ts_hi]; bisection on f(t)=alt(t)−h (bracket < 0.25 s)."""
-    f_lo = _alt_deg_at_ts_scalar(ts_lo, ra_rad, dec_rad, lat_rad, lon_deg) - h_deg
-    f_hi = _alt_deg_at_ts_scalar(ts_hi, ra_rad, dec_rad, lat_rad, lon_deg) - h_deg
-    if f_lo * f_hi > 0:
-        return None
-    lo, hi = float(ts_lo), float(ts_hi)
-    fl, fh = f_lo, f_hi
-    for _ in range(max_iter):
-        if abs(hi - lo) < 0.25:
-            break
-        m = 0.5 * (lo + hi)
-        fm = _alt_deg_at_ts_scalar(m, ra_rad, dec_rad, lat_rad, lon_deg) - h_deg
-        if fl * fm <= 0:
-            hi, fh = m, fm
-        else:
-            lo, fl = m, fm
-    return 0.5 * (lo + hi)
-
-
-def _bisect_altitude_batch(ts_lo, ts_hi, ra_rad, dec_rad, lat_rad, lon_deg, h_deg, max_iter=22):
-    """Vector bisection for many objects sharing the same time bracket (invalid brackets -> NaN)."""
-    ra_rad = np.asarray(ra_rad, dtype=np.float64)
-    dec_rad = np.asarray(dec_rad, dtype=np.float64)
-    n = int(ra_rad.shape[0])
-    if n == 0:
-        return np.zeros(0, dtype=np.float64)
-    ts_lo = float(ts_lo)
-    ts_hi = float(ts_hi)
-    lo = np.full(n, ts_lo, dtype=np.float64)
-    hi = np.full(n, ts_hi, dtype=np.float64)
-    fl = _alt_deg_shared_unix_ts(ts_lo, ra_rad, dec_rad, lat_rad, lon_deg) - h_deg
-    fh = _alt_deg_shared_unix_ts(ts_hi, ra_rad, dec_rad, lat_rad, lon_deg) - h_deg
-    bad = fl * fh > 0
-    for it in range(max_iter):
-        m = 0.5 * (lo + hi)
-        # First step only: all brackets share the same [ts_lo, ts_hi], so m is identical for every object.
-        if it == 0:
-            fm = _alt_deg_shared_unix_ts(float(m[0]), ra_rad, dec_rad, lat_rad, lon_deg) - h_deg
-        else:
-            fm = _alt_deg_at_ts_batch(m, ra_rad, dec_rad, lat_rad, lon_deg) - h_deg
-        take_hi = (~bad) & (fl * fm <= 0)
-        take_lo = (~bad) & (~take_hi)
-        hi = np.where(take_hi, m, hi)
-        fh = np.where(take_hi, fm, fh)
-        lo = np.where(take_lo, m, lo)
-        fl = np.where(take_lo, fm, fl)
-        if np.bitwise_and.reduce(bad | (hi - lo < 0.25)):
-            break
-    out = 0.5 * (lo + hi)
-    out[bad] = np.nan
-    return out
-
-
-def _visible_segments_above_alt_from_grid(ts_grid, alt_row, ts0, ts1, ra_rad, dec_rad, lat_rad, lon_deg, h_deg):
+def compute_viewing_rows_batch(ctx, object_ids, names, types, messier_col, ra_j2000, dec_j2000, ra_now, dec_now, min_altitude, n_scan=25, progress_nights=False):
     """
-    Intervals in [ts0, ts1] where altitude >= h_deg.
-    The time grid only brackets sign changes; each crossing is refined with bisection on the same alt model.
+    Find the best night/time to view each object.
+
+    Takes: precomputed night context + catalog arrays + minimum altitude (deg)
+    Returns: list of output rows (tuples) for the final DataFrame
     """
-    n_scan = len(ts_grid)
-    dh = alt_row - h_deg
-    roots = []
-    for i in range(n_scan - 1):
-        if dh[i] == 0.0:
-            roots.append(float(ts_grid[i]))
-        elif dh[i] * dh[i + 1] < 0.0:
-            r = _bisect_altitude_equals(
-                float(ts_grid[i]), float(ts_grid[i + 1]), ra_rad, dec_rad, lat_rad, lon_deg, h_deg
-            )
-            if r is not None:
-                roots.append(r)
-    roots = sorted(set(roots))
-    knots = [float(ts0)] + roots + [float(ts1)]
-    segs = []
-    for j in range(len(knots) - 1):
-        ta, tb = knots[j], knots[j + 1]
-        if tb - ta < 1e-6:
-            continue
-        mid = 0.5 * (ta + tb)
-        if _alt_deg_at_ts_scalar(mid, ra_rad, dec_rad, lat_rad, lon_deg) >= h_deg:
-            segs.append((ta, tb))
-    return segs
-
-
-def _night_visibility_refined(ts_grid, alt_row, ts0, ts1, ra_rad, dec_rad, lat_rad, lon_deg, h_deg):
-    """
-    Longest continuous span >= h_deg during [ts0, ts1], using grid + bisection for boundaries.
-    Returns (duration_h, seg_ta, seg_tb, peak_alt_rank) for ranking; no datetime formatting.
-    """
-    segs = _visible_segments_above_alt_from_grid(
-        ts_grid, alt_row, ts0, ts1, ra_rad, dec_rad, lat_rad, lon_deg, h_deg
-    )
-    if not segs:
-        return None
-    ta, tb = max(segs, key=lambda ab: ab[1] - ab[0])
-    duration_h = (tb - ta) / 3600.0
-    if duration_h <= 0.0:
-        return None
-    aa = _alt_deg_at_ts_scalar(ta, ra_rad, dec_rad, lat_rad, lon_deg)
-    ab = _alt_deg_at_ts_scalar(tb, ra_rad, dec_rad, lat_rad, lon_deg)
-    peak_alt_rank = max(aa, ab)
-    return duration_h, ta, tb, peak_alt_rank
-
-
-def _catalog_sorted_crossings_J_Rt(dh, ts_grid, refine_mask, ra_rad_vec, dec_rad_vec, lat_rad, lon_deg, h):
-    """
-    For all objects, collect times where alt crosses the horizon threshold on the coarse grid:
-    exact hits on a sample, sign changes between samples (refined by bisection). Returns sorted
-    (object_index, crossing_time) rows with duplicate pairs removed.
-    """
-    _, g = dh.shape
-    j_parts = []
-    t_parts = []
-    for i in range(g):
-        jz = np.flatnonzero((dh[:, i] == 0.0) & refine_mask)
-        if jz.size:
-            j_parts.append(jz)
-            t_parts.append(np.full(jz.shape[0], ts_grid[i], dtype=np.float64))
-    for i in range(g - 1):
-        jc = np.flatnonzero(dh[:, i] * dh[:, i + 1] < 0.0)
-        if jc.size:
-            jc = jc[refine_mask[jc]]
-            if jc.size:
-                r = _bisect_altitude_batch(
-                    ts_grid[i],
-                    ts_grid[i + 1],
-                    ra_rad_vec[jc],
-                    dec_rad_vec[jc],
-                    lat_rad,
-                    lon_deg,
-                    h,
-                )
-                ok = ~np.isnan(r)
-                if np.any(ok):
-                    j_parts.append(jc[ok])
-                    t_parts.append(r[ok])
-    if not j_parts:
-        return np.zeros(0, dtype=np.intp), np.zeros(0, dtype=np.float64)
-    J = np.concatenate(j_parts)
-    Rt = np.concatenate(t_parts)
-    order = np.lexsort((Rt, J))
-    J, Rt = J[order], Rt[order]
-    if J.size > 1:
-        nodup = (J[1:] != J[:-1]) | (Rt[1:] != Rt[:-1])
-        keep = np.empty(J.shape[0], dtype=bool)
-        keep[0] = True
-        keep[1:] = nodup
-        J, Rt = J[keep], Rt[keep]
-    return J, Rt
-
-
-def _apply_night_catalog_update(ni, ts0, ts1, ts_grid, alt, dh, ra_rad_vec, dec_rad_vec, lat_rad, lon_deg, h, best_duration, best_peak_rank, best_night_idx, best_seg_ta, best_seg_tb, refine_mask):
-    # One night: (1) crossing times → knot intervals, (2) vector midpoint test for alt≥h,
-    # (3) pick best interval per object vs current best, (4) scalar fallback if the grid missed a case.
-    n_obj, g = dh.shape
-    ts0 = float(ts0)
-    ts1 = float(ts1)
-    h = float(h)
-
-    J, Rt = _catalog_sorted_crossings_J_Rt(dh, ts_grid, refine_mask, ra_rad_vec, dec_rad_vec, lat_rad, lon_deg, h)
-
-    if not np.any(refine_mask):
-        return
-
-    j_always = np.flatnonzero((np.min(dh, axis=1) >= 0.0) & refine_mask)
-    unique_j, start = (np.unique(J, return_index=True) if J.size else (np.zeros(0, dtype=np.intp), np.zeros(0, dtype=np.intp)))
-    end = np.append(start[1:], len(J))
-    in_root = np.zeros(n_obj, dtype=bool)
-    if unique_j.size:
-        in_root[unique_j] = True
-    j_full = j_always[~in_root[j_always]]
-
-    max_bt = int(np.count_nonzero(refine_mask)) * (g + 3) + 8
-    b_j = np.empty(max_bt, dtype=np.intp)
-    b_mid = np.empty(max_bt, dtype=np.float64)
-    b_ta = np.empty(max_bt, dtype=np.float64)
-    b_tb = np.empty(max_bt, dtype=np.float64)
-    pos = 0
-
-    u_keep = refine_mask[unique_j]
-    uj = unique_j[u_keep]
-    us = start[u_keep]
-    ue = end[u_keep]
-    for k in range(uj.shape[0]):
-        j = int(uj[k])
-        roots = Rt[int(us[k]) : int(ue[k])]
-        nk = int(roots.size)
-        knots = np.empty(nk + 2, dtype=np.float64)
-        knots[0] = ts0
-        if nk:
-            knots[1:-1] = roots
-        knots[-1] = ts1
-        taa = knots[:-1]
-        tbb = knots[1:]
-        ok_seg = (tbb - taa) >= 1e-6
-        n_add = int(np.count_nonzero(ok_seg))
-        if n_add:
-            b_j[pos : pos + n_add] = j
-            b_mid[pos : pos + n_add] = 0.5 * (taa[ok_seg] + tbb[ok_seg])
-            b_ta[pos : pos + n_add] = taa[ok_seg]
-            b_tb[pos : pos + n_add] = tbb[ok_seg]
-            pos += n_add
-
-    for j in j_full:
-        b_j[pos] = j
-        b_mid[pos] = 0.5 * (ts0 + ts1)
-        b_ta[pos] = ts0
-        b_tb[pos] = ts1
-        pos += 1
-
-    processed = np.zeros(n_obj, dtype=bool)
-
-    if pos > 0:
-        bj = b_j[:pos]
-        bta = b_ta[:pos]
-        btb = b_tb[:pos]
-        al_m = _alt_deg_at_ts_batch(b_mid[:pos], ra_rad_vec[bj], dec_rad_vec[bj], lat_rad, lon_deg)
-        vis = al_m >= h
-        dur = (btb - bta) / 3600.0
-        aa = _alt_deg_at_ts_batch(bta, ra_rad_vec[bj], dec_rad_vec[bj], lat_rad, lon_deg)
-        ab = _alt_deg_at_ts_batch(btb, ra_rad_vec[bj], dec_rad_vec[bj], lat_rad, lon_deg)
-        pr = np.maximum(aa, ab)
-
-        w = np.flatnonzero(vis)
-        if w.size:
-            bjv = bj[w]
-            dvv = dur[w]
-            prv = pr[w]
-            ordv = np.lexsort((-prv, -dvv, bjv))
-            bj_so = bjv[ordv]
-            fst = np.concatenate([[True], bj_so[1:] != bj_so[:-1]])
-            pick_w = w[ordv[fst]]
-            jj = bj[pick_w]
-            keep = refine_mask[jj]
-            pick_w, jj = pick_w[keep], jj[keep]
-            cand_d = dur[pick_w]
-            cand_pr = pr[pick_w]
-            cand_ta = bta[pick_w]
-            cand_tb = btb[pick_w]
-            old_d = best_duration[jj]
-            old_pr = best_peak_rank[jj]
-            better = (cand_d > old_d) | ((cand_d == old_d) & (cand_pr > old_pr))
-            if np.any(better):
-                jj_b = jj[better]
-                best_duration[jj_b] = cand_d[better]
-                best_peak_rank[jj_b] = cand_pr[better]
-                best_night_idx[jj_b] = ni
-                best_seg_ta[jj_b] = cand_ta[better]
-                best_seg_tb[jj_b] = cand_tb[better]
-            processed[jj] = True
-
-    miss = np.flatnonzero(refine_mask & ~processed)
-    for j in miss:
-        nv = _night_visibility_refined(ts_grid, alt[j], ts0, ts1, float(ra_rad_vec[j]), float(dec_rad_vec[j]), lat_rad, lon_deg, h)
-        if nv is None:
-            continue
-        duration_h, seg_ta, seg_tb, peak_alt_rank = nv
-        cand_pair = (duration_h, peak_alt_rank)
-        rank_pair = (best_duration[j], best_peak_rank[j])
-        if cand_pair > rank_pair:
-            best_duration[j] = duration_h
-            best_peak_rank[j] = peak_alt_rank
-            best_night_idx[j] = ni
-            best_seg_ta[j] = seg_ta
-            best_seg_tb[j] = seg_tb
-
-
-def _compute_viewing_rows_batch(ctx, object_ids, names, types, messier_col, ra_j2000, dec_j2000, ra_now, dec_now, min_altitude, n_scan=25, progress_nights=False):
-    """
-    Per object: best astro-dark night by longest time above min altitude (tie-break: higher alt at segment ends).
-    Each night: vectorized altitudes on a time grid for bracketing; crossings solved by bisection on alt(t)=h;
-    peak time by ternary search on the same alt model.
-    """
+    # Core idea:
+    # - Altitude depends on hour angle: sin(alt) = sin(dec)*sin(lat) + cos(dec)*cos(lat)*cos(HA)
+    # - Solve "alt >= min_altitude" as a simple hour-angle limit |HA| <= H
+    # - For each astro-dark night, approximate HA(t) as linear using LST at the night endpoints
+    # - Pick the longest visible segment; tie-break with peak altitude
     lat_deg = float(ctx.latitude)
     lon_deg = float(ctx.longitude)
     lat_rad = np.deg2rad(lat_deg)
@@ -722,8 +399,9 @@ def _compute_viewing_rows_batch(ctx, object_ids, names, types, messier_col, ra_j
     cos_lat = float(np.cos(lat_rad))
     n_obj = int(ra_rad_vec.shape[0])
     num_nights = len(ctx.night_dates)
-    g = max(5, int(n_scan))
     h = float(min_altitude)
+    h_rad = np.deg2rad(h)
+    sin_h = float(np.sin(h_rad))
 
     best_duration = np.full(n_obj, -1.0, dtype=np.float64)
     best_peak_rank = np.full(n_obj, -999.0, dtype=np.float64)
@@ -734,15 +412,48 @@ def _compute_viewing_rows_batch(ctx, object_ids, names, types, messier_col, ra_j
 
     ts0_all = np.asarray(ctx.night_dark_start_ts, dtype=np.float64)
     ts1_all = np.asarray(ctx.night_dark_end_ts, dtype=np.float64)
-    ts_grid_all = np.zeros((num_nights, g), dtype=np.float64)
-    for ni in range(num_nights):
-        t0, t1 = float(ts0_all[ni]), float(ts1_all[ni])
-        if t1 > t0:
-            ts_grid_all[ni] = np.linspace(t0, t1, g, dtype=np.float64)
-    jd_all = ts_grid_all / 86400.0 + 2440587.5
-    lst_all = local_sidereal_time_rad(jd_all, lon_deg)
+    # Precompute LST at night endpoints (per-night linear HA model).
+    # We compute LST for all nights in one vectorized call, then derive a per-night sidereal rate.
+    jd0 = ts0_all / 86400.0 + 2440587.5
+    jd1 = ts1_all / 86400.0 + 2440587.5
+    lst0_all = local_sidereal_time_rad(jd0, lon_deg)
+    lst1_all = local_sidereal_time_rad(jd1, lon_deg)
+    two_pi = 2.0 * np.pi
+    # unwrap forward across the interval (LST is modulo 2π)
+    dlst = lst1_all - lst0_all
+    dlst = np.where(dlst <= 0.0, dlst + two_pi, dlst)
+    dt_all = ts1_all - ts0_all
+    # Avoid division by zero; nights with dt<=0 are skipped below.
+    omega_all = np.where(dt_all > 0.0, dlst / dt_all, 0.0)
 
-    night_chunk = 48
+    # Visibility hour-angle half-width per object (H, radians). Handle edge cases:
+    # - denom ~ 0 -> altitude is (nearly) constant in time w.r.t HA; either always above or never.
+    denom = cos_dec_v * cos_lat
+    # For numerical stability near poles/dec=±90.
+    denom_safe = np.where(np.abs(denom) < 1e-14, np.nan, denom)
+    cosH = (sin_h - sin_dec_v * sin_lat) / denom_safe
+    # Always above: cosH <= -1 -> H = π (full circle). Never above: cosH > 1 -> no solutions.
+    always_above = np.isfinite(cosH) & (cosH <= -1.0)
+    never_above = ~always_above & (np.isnan(cosH) | (cosH > 1.0))
+    H = np.empty(n_obj, dtype=np.float64)
+    H[always_above] = np.pi
+    H[never_above] = 0.0
+    mid = ~(always_above | never_above)
+    H[mid] = np.arccos(np.clip(cosH[mid], -1.0, 1.0))
+
+    # For denom≈0 cases where cosH is nan, decide by constant-alt test.
+    # sin_alt_const = sin(dec)*sin(lat) (since cos(dec)*cos(lat)≈0)
+    if np.any(np.isnan(cosH)):
+        sin_alt_const = sin_dec_v * sin_lat
+        const_above = np.isnan(cosH) & (sin_alt_const >= sin_h)
+        always_above |= const_above
+        never_above |= (np.isnan(cosH) & ~const_above)
+        H[const_above] = np.pi
+        H[np.isnan(cosH) & ~const_above] = 0.0
+
+    def _wrap_to_pi(x):
+        return (x + np.pi) % two_pi - np.pi
+
     night_list = list(range(num_nights))
     if progress_nights:
         try:
@@ -752,34 +463,109 @@ def _compute_viewing_rows_batch(ctx, object_ids, names, types, messier_col, ra_j
         except ImportError:
             pass
 
-    cur_c0 = -1
-    alt_blk = None
     for ni in night_list:
         ts0 = float(ts0_all[ni])
         ts1 = float(ts1_all[ni])
         if ts1 <= ts0:
             continue
-        c0 = (ni // night_chunk) * night_chunk
-        if c0 != cur_c0:
-            cur_c0 = c0
-            c1 = min(c0 + night_chunk, num_nights)
-            lst_b = lst_all[c0:c1]
-            ha_b = lst_b[:, np.newaxis, :] - ra_rad_vec[np.newaxis, :, np.newaxis]
-            sin_alt_b = (
-                sin_dec_v[np.newaxis, :, np.newaxis] * sin_lat
-                + cos_dec_v[np.newaxis, :, np.newaxis] * cos_lat * np.cos(ha_b)
-            )
-            alt_blk = np.rad2deg(np.arcsin(np.clip(sin_alt_b, -1.0, 1.0)))
-        alt = alt_blk[ni - c0]
-        ts_grid = ts_grid_all[ni]
-        dh = alt - h
-        if not np.any(dh >= 0.0):
+        omega = float(omega_all[ni])
+        if omega <= 0.0:
+            continue
+        lst0 = float(lst0_all[ni])
+
+        # HA at night start, wrapped to [-π, π] for a stable local unwrapped segment.
+        ha0 = _wrap_to_pi(lst0 - ra_rad_vec)
+        dt = ts1 - ts0
+        ha1 = ha0 + omega * dt  # unwrapped forward
+
+        # Build the best (longest) continuous segment above threshold within the night for each object.
+        # If always_above: whole night. If never_above: none.
+        seg_len = np.zeros(n_obj, dtype=np.float64)
+        seg_ta = np.full(n_obj, np.nan, dtype=np.float64)
+        seg_tb = np.full(n_obj, np.nan, dtype=np.float64)
+        seg_shift = np.zeros(n_obj, dtype=np.float64)  # which 2π shift interval produced the best segment
+
+        # Whole-night visibility
+        if np.any(always_above):
+            seg_len[always_above] = dt
+            seg_ta[always_above] = ts0
+            seg_tb[always_above] = ts1
+            seg_shift[always_above] = 0.0
+
+        cand = ~(always_above | never_above)
+        if np.any(cand):
+            hc0 = ha0[cand]
+            hc1 = ha1[cand]
+            Hc = H[cand]
+
+            # Consider primary interval and ±2π-shifted intervals to handle wrap across ±π.
+            shifts = np.array([-two_pi, 0.0, two_pi], dtype=np.float64)
+            # We’ll compute intersection lengths for each shift and pick the best.
+            bestL = np.zeros(hc0.shape[0], dtype=np.float64)
+            bestTa = np.zeros(hc0.shape[0], dtype=np.float64)
+            bestTb = np.zeros(hc0.shape[0], dtype=np.float64)
+            bestS = np.zeros(hc0.shape[0], dtype=np.float64)
+
+            for s in shifts:
+                lo = -Hc + s
+                hi = Hc + s
+                a = np.maximum(hc0, lo)
+                b = np.minimum(hc1, hi)
+                L = np.maximum(0.0, b - a)
+                take = L > bestL
+                if np.any(take):
+                    bestL = np.where(take, L, bestL)
+                    bestTa = np.where(take, a, bestTa)
+                    bestTb = np.where(take, b, bestTb)
+                    bestS = np.where(take, s, bestS)
+
+            # Convert HA bounds back to timestamps.
+            # ha(t) = ha0 + omega*(t - ts0) => t = ts0 + (ha - ha0)/omega
+            idx = np.flatnonzero(cand)
+            Lgood = bestL > 0.0
+            if np.any(Lgood):
+                ii = idx[Lgood]
+                a = bestTa[Lgood]
+                b = bestTb[Lgood]
+                h0 = ha0[ii]
+                ta = ts0 + (a - h0) / omega
+                tb = ts0 + (b - h0) / omega
+                seg_len[ii] = np.maximum(0.0, tb - ta)
+                seg_ta[ii] = ta
+                seg_tb[ii] = tb
+                seg_shift[ii] = bestS[Lgood]
+
+        # Update total_good count (any visibility that night).
+        total_good += (seg_len > 0.0).astype(np.int32)
+
+        # Candidate night only matters if it can beat current best duration (duration tie-break handled below).
+        night_len_h = dt / 3600.0
+        refine_mask = (seg_len > 0.0) & (night_len_h >= best_duration)
+        if not np.any(refine_mask):
             continue
 
-        total_good += (np.max(dh, axis=1) >= h).astype(np.int32)
-        night_len_h = (ts1 - ts0) / 3600.0
-        refine_mask = (np.max(dh, axis=1) >= h) & (night_len_h >= best_duration)
-        _apply_night_catalog_update(ni, ts0, ts1, ts_grid, alt, dh, ra_rad_vec, dec_rad_vec, lat_rad, lon_deg, h, best_duration, best_peak_rank, best_night_idx, best_seg_ta, best_seg_tb, refine_mask)
+        # Peak time: time when HA is closest to transit (HA == 2πk), within the chosen segment.
+        # For our selected segment, the relevant transit target is HA == seg_shift (0, ±2π).
+        jj = np.flatnonzero(refine_mask)
+        # Transit time in unwrapped coords
+        t_transit = ts0 + (seg_shift[jj] - ha0[jj]) / omega
+        # Clamp to visibility segment
+        t_peak = np.clip(t_transit, seg_ta[jj], seg_tb[jj])
+
+        # Rank by duration (hours), then peak altitude at t_peak.
+        dur_h = seg_len[jj] / 3600.0
+        peak_alt = altitude_deg_at_unix_ts(t_peak, ra_rad_vec[jj], dec_rad_vec[jj], lat_rad, lon_deg)
+
+        old_d = best_duration[jj]
+        old_pr = best_peak_rank[jj]
+        better = (dur_h > old_d) | ((dur_h == old_d) & (peak_alt > old_pr))
+        if np.any(better):
+            jbest = jj[better]
+            best_duration[jbest] = dur_h[better]
+            best_peak_rank[jbest] = peak_alt[better]
+            best_night_idx[jbest] = ni
+            best_seg_ta[jbest] = seg_ta[jbest]
+            best_seg_tb[jbest] = seg_tb[jbest]
 
     good = best_night_idx >= 0
     gid = np.flatnonzero(good)
@@ -793,11 +579,26 @@ def _compute_viewing_rows_batch(ctx, object_ids, names, types, messier_col, ra_j
         tb = best_seg_tb[gid]
         ra_g = ra_rad_vec[gid]
         dec_g = dec_rad_vec[gid]
-        p_ts = _ternary_search_peak_times_batch(ta, tb, ra_g, dec_g, lat_rad, lon_deg)
+        # Peak is at transit (HA=0 mod 2π) if it falls in [ta, tb], otherwise at the nearer endpoint.
+        # Use per-night omega derived above for each best night to compute the transit time.
+        bi = best_night_idx[gid].astype(np.intp, copy=False)
+        omega_g = omega_all[bi]
+        lst0_g = lst0_all[bi]
+        ha0_g = _wrap_to_pi(lst0_g - ra_g)
+        # Choose the nearest k (HA=2πk) for the unwrapped segment; because ha0 is in [-π,π],
+        # k in {0, ±1} is sufficient. Pick the k that yields a transit time closest to mid-segment.
+        mid_t = 0.5 * (ta + tb)
+        # Candidate transits for k=-1,0,1
+        k = np.array([-1.0, 0.0, 1.0], dtype=np.float64)
+        t_cand = ts0_all[bi][:, None] + ((k[None, :] * two_pi) - ha0_g[:, None]) / omega_g[:, None]
+        # pick closest to segment midpoint
+        pick = np.argmin(np.abs(t_cand - mid_t[:, None]), axis=1)
+        t_transit = t_cand[np.arange(t_cand.shape[0]), pick]
+        p_ts = np.clip(t_transit, ta, tb)
         n = int(gid.size)
         ra3 = np.concatenate([ra_g, ra_g, ra_g])
         dec3 = np.concatenate([dec_g, dec_g, dec_g])
-        alt_all, az_all = _alt_az_deg_vector_ts(
+        alt_all, az_all = altitude_azimuth_deg_at_unix_ts(
             np.concatenate([ta, tb, p_ts]), ra3, dec3, lat_rad, lon_deg
         )
         rise_az_arr[gid] = az_all[:n]
@@ -851,7 +652,7 @@ def compute_catalog_object_viewing(ctx, args):
     """Compute one catalog row (legacy path; batch pipeline is preferred)."""
     obj_id, ra_j2000, dec_j2000, ra_now, dec_now, name, obj_type, messier_num, min_altitude = args
     try:
-        rows = _compute_viewing_rows_batch(ctx, np.array([obj_id], dtype=object), np.array([name], dtype=object), np.array([obj_type], dtype=object), np.array([messier_num], dtype=object), np.array([ra_j2000], dtype=np.float64), np.array([dec_j2000], dtype=np.float64), np.array([ra_now], dtype=np.float64), np.array([dec_now], dtype=np.float64), min_altitude)
+        rows = compute_viewing_rows_batch(ctx, np.array([obj_id], dtype=object), np.array([name], dtype=object), np.array([obj_type], dtype=object), np.array([messier_num], dtype=object), np.array([ra_j2000], dtype=np.float64), np.array([dec_j2000], dtype=np.float64), np.array([ra_now], dtype=np.float64), np.array([dec_now], dtype=np.float64), min_altitude)
         return rows[0]
     except Exception:
         return (obj_id, name, obj_type, messier_num, ra_j2000, dec_j2000, 'N/A', 'N/A', 'Error', 'N/A',
@@ -948,7 +749,7 @@ class StarTellerCLI:
                    'Observing_Duration_Hours', 'Visible_Nights_Per_Year',
                    'Dark_Start_Local', 'Dark_End_Local']
         ctx = ObservationContext(self.latitude, self.longitude, night_dates_tuples, night_dark_start_ts, night_dark_end_ts, local_tz_str)
-        results = _compute_viewing_rows_batch(ctx, object_ids, display_names, types, messier_col, ra_j2000, dec_j2000, ra_now, dec_now, min_altitude, n_scan=int(time_grid_points), progress_nights=use_tqdm)
+        results = compute_viewing_rows_batch(ctx, object_ids, display_names, types, messier_col, ra_j2000, dec_j2000, ra_now, dec_now, min_altitude, n_scan=int(time_grid_points), progress_nights=use_tqdm)
         results_df = pd.DataFrame(results, columns=columns)
         extra = pd.DataFrame(
             {
