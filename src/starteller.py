@@ -15,6 +15,10 @@ except ImportError:
     from catalog_manager import load_ngc_catalog
 
 
+def unix_timestamp_to_julian_date(ts_unix):
+    return np.asarray(ts_unix, dtype=np.float64) / 86400.0 + 2440587.5
+
+
 def local_sidereal_time_rad(jd_array, longitude_deg):
     """
     Calculate Local Sidereal Time for an array of Julian dates
@@ -87,54 +91,12 @@ def precess_equatorial_j2000(ra_j2000_deg, dec_j2000_deg, jd_target):
     return ra_new_deg, dec_new_deg
 
 
-def altitude_deg_at_unix_ts(ts_unix, ra_rad, dec_rad, lat_rad, lon_deg):
+def equatorial_to_horizontal_deg(ra_deg, dec_deg, lst_rad, lat_rad, return_azimuth=True):
     """
-    Calculate topocentric altitude (vectorized).
+    Calculate altitude and (optionally) azimuth from equatorial coordinates.
 
-    Takes: Unix timestamp(s), RA/Dec in radians (same leading shape as timestamps), latitude in radians, longitude in degrees
-    Returns: Altitude(s) in degrees
-    """
-    jd = np.asarray(ts_unix, dtype=np.float64) / 86400.0 + 2440587.5
-    lst = local_sidereal_time_rad(jd, lon_deg)
-    ra = np.asarray(ra_rad, dtype=np.float64)
-    dec = np.asarray(dec_rad, dtype=np.float64)
-    ha = lst - ra
-    sin_alt = np.sin(dec) * np.sin(lat_rad) + np.cos(dec) * np.cos(lat_rad) * np.cos(ha)
-    sin_alt = np.clip(sin_alt, -1.0, 1.0)
-    return np.rad2deg(np.arcsin(sin_alt))
-
-
-def altitude_azimuth_deg_at_unix_ts(t_vec, ra_vec, dec_vec, lat_rad, lon_deg):
-    """
-    Calculate altitude and azimuth (vectorized).
-
-    Takes: Unix timestamp(s), RA/Dec in radians, latitude in radians, longitude in degrees
-    Returns: (alt_deg, az_deg) arrays in degrees
-    """
-    jd = np.asarray(t_vec, dtype=np.float64) / 86400.0 + 2440587.5
-    lst = local_sidereal_time_rad(jd, lon_deg)
-    ha = lst - ra_vec
-    sdec = np.sin(dec_vec)
-    cdec = np.cos(dec_vec)
-    slat = np.sin(lat_rad)
-    clat = np.cos(lat_rad)
-    sin_alt = sdec * slat + cdec * clat * np.cos(ha)
-    sin_alt = np.clip(sin_alt, -1.0, 1.0)
-    alt_rad = np.arcsin(sin_alt)
-    cos_alt = np.cos(alt_rad)
-    cos_alt = np.where(np.abs(cos_alt) < 1e-10, np.copysign(1e-10, cos_alt), cos_alt)
-    sin_az = -cdec * np.sin(ha) / cos_alt
-    cos_az = (sdec - slat * np.sin(alt_rad)) / (clat * cos_alt)
-    az_rad = np.arctan2(sin_az, cos_az)
-    return np.rad2deg(alt_rad), np.rad2deg(az_rad) % 360.0
-
-
-def equatorial_to_horizontal_deg(ra_deg, dec_deg, lst_rad, lat_rad):
-    """
-    Calculate altitude and azimuth
-
-    Takes: Right Ascension, Declination, Local Sidereal Time array, and observer latitude
-    Returns: alt_deg, az_deg: numpy arrays of altitude and azimuth in degrees
+    Takes: Right Ascension and Declination in degrees, Local Sidereal Time in radians, latitude in radians
+    Returns: alt_deg, and az_deg if return_azimuth is True
     """
     # Convert to radians
     ra_rad = np.deg2rad(ra_deg)
@@ -147,11 +109,15 @@ def equatorial_to_horizontal_deg(ra_deg, dec_deg, lst_rad, lat_rad):
     sin_alt = (np.sin(dec_rad) * np.sin(lat_rad) +
                np.cos(dec_rad) * np.cos(lat_rad) * np.cos(ha_rad))
     alt_rad = np.arcsin(np.clip(sin_alt, -1.0, 1.0))
+    alt_deg = np.rad2deg(alt_rad)
+
+    if not return_azimuth:
+        return alt_deg
 
     # Azimuth calculation
     cos_alt = np.cos(alt_rad)
     # Avoid division by zero at zenith
-    cos_alt = np.where(np.abs(cos_alt) < 1e-10, 1e-10, cos_alt)
+    cos_alt = np.where(np.abs(cos_alt) < 1e-10, np.copysign(1e-10, cos_alt), cos_alt)
 
     sin_az = -np.cos(dec_rad) * np.sin(ha_rad) / cos_alt
     cos_az = (np.sin(dec_rad) - np.sin(lat_rad) * np.sin(alt_rad)) / (np.cos(lat_rad) * cos_alt)
@@ -159,7 +125,6 @@ def equatorial_to_horizontal_deg(ra_deg, dec_deg, lst_rad, lat_rad):
     az_rad = np.arctan2(sin_az, cos_az)
 
     # Convert to degrees
-    alt_deg = np.rad2deg(alt_rad)
     az_deg = np.rad2deg(az_rad) % 360.0
 
     return alt_deg, az_deg
@@ -228,15 +193,9 @@ def sun_altitude_deg(jd, latitude, longitude):
 
 ASTRO_DARK_ALT_DEG = -18.0
 
-
 def sun_altitude_minus_target(ts_unix, latitude, longitude, target_alt=ASTRO_DARK_ALT_DEG):
-    """
-    Helper for root finding on Sun altitude.
-
-    Takes: Unix timestamp (seconds), latitude(deg), longitude(deg), target altitude (deg)
-    Returns: sun_altitude_deg(ts) - target_alt
-    """
-    jd = ts_unix / 86400.0 + 2440587.5
+    # Helper for root finding on Sun altitude
+    jd = float(unix_timestamp_to_julian_date(ts_unix))
     return float(sun_altitude_deg(jd, latitude, longitude)) - target_alt
 
 
@@ -244,7 +203,7 @@ def bisect_sun_altitude_crossing(ts_lo, ts_hi, latitude, longitude, target_alt=A
     """
     Find the time where Sun altitude == target_alt using bisection.
 
-    Takes: two Unix timestamps bracketing a crossing, latitude(deg), longitude(deg), target altitude (deg)
+    Takes: Two Unix timestamps bracketing a crossing, latitude(deg), longitude(deg), target altitude (deg)
     Returns: Unix timestamp (seconds)
     """
     flo = sun_altitude_minus_target(ts_lo, latitude, longitude, target_alt)
@@ -277,7 +236,7 @@ def dark_window_local_noon_day(check_date, latitude, longitude, local_tz, n_scan
         return None
 
     ts = np.linspace(t0, t1, n_scan)
-    jd = ts / 86400.0 + 2440587.5
+    jd = unix_timestamp_to_julian_date(ts)
     alt = sun_altitude_deg(jd, latitude, longitude)
     f = alt - ASTRO_DARK_ALT_DEG
 
@@ -317,10 +276,6 @@ def dark_window_local_noon_day(check_date, latitude, longitude, local_tz, n_scan
 def compute_year_dark_windows(args):
     """
     Compute astronomical-dark [start, end] for each local calendar day.
-
-    For each ``check_date``, uses **local noon → next noon**: Sun altitude is a smooth
-    function of time (same low-precision sun + LST as everywhere else). Roots of
-    (alt - (−18°)) are found with a short scan + bisection—no 15-minute ladder.
 
     Args: (year, latitude, longitude, local_tz_str)
     Returns: (year, list of (check_date, dark_start, dark_end)) or (year, None) on error.
@@ -414,8 +369,8 @@ def compute_viewing_rows_batch(ctx, object_ids, names, types, messier_col, ra_j2
     ts1_all = np.asarray(ctx.night_dark_end_ts, dtype=np.float64)
     # Precompute LST at night endpoints (per-night linear HA model).
     # We compute LST for all nights in one vectorized call, then derive a per-night sidereal rate.
-    jd0 = ts0_all / 86400.0 + 2440587.5
-    jd1 = ts1_all / 86400.0 + 2440587.5
+    jd0 = unix_timestamp_to_julian_date(ts0_all)
+    jd1 = unix_timestamp_to_julian_date(ts1_all)
     lst0_all = local_sidereal_time_rad(jd0, lon_deg)
     lst1_all = local_sidereal_time_rad(jd1, lon_deg)
     two_pi = 2.0 * np.pi
@@ -554,7 +509,15 @@ def compute_viewing_rows_batch(ctx, object_ids, names, types, messier_col, ra_j2
 
         # Rank by duration (hours), then peak altitude at t_peak.
         dur_h = seg_len[jj] / 3600.0
-        peak_alt = altitude_deg_at_unix_ts(t_peak, ra_rad_vec[jj], dec_rad_vec[jj], lat_rad, lon_deg)
+        jd_peak = unix_timestamp_to_julian_date(t_peak)
+        lst_peak = local_sidereal_time_rad(jd_peak, lon_deg)
+        peak_alt = equatorial_to_horizontal_deg(
+            np.rad2deg(ra_rad_vec[jj]),
+            np.rad2deg(dec_rad_vec[jj]),
+            lst_peak,
+            lat_rad,
+            return_azimuth=False,
+        )
 
         old_d = best_duration[jj]
         old_pr = best_peak_rank[jj]
@@ -598,8 +561,15 @@ def compute_viewing_rows_batch(ctx, object_ids, names, types, messier_col, ra_j2
         n = int(gid.size)
         ra3 = np.concatenate([ra_g, ra_g, ra_g])
         dec3 = np.concatenate([dec_g, dec_g, dec_g])
-        alt_all, az_all = altitude_azimuth_deg_at_unix_ts(
-            np.concatenate([ta, tb, p_ts]), ra3, dec3, lat_rad, lon_deg
+        ts_all = np.concatenate([ta, tb, p_ts])
+        jd_all = unix_timestamp_to_julian_date(ts_all)
+        lst_all = local_sidereal_time_rad(jd_all, lon_deg)
+        alt_all, az_all = equatorial_to_horizontal_deg(
+            np.rad2deg(ra3),
+            np.rad2deg(dec3),
+            lst_all,
+            lat_rad,
+            return_azimuth=True,
         )
         rise_az_arr[gid] = az_all[:n]
         set_az_arr[gid] = az_all[n : 2 * n]
@@ -654,19 +624,6 @@ def compute_viewing_rows_batch(ctx, object_ids, names, types, messier_col, ra_j2
              dark_start.strftime('%H:%M'), dark_end.strftime('%H:%M'))
         )
     return rows
-
-
-def compute_catalog_object_viewing(ctx, args):
-    """Compute one catalog row (legacy path; batch pipeline is preferred)."""
-    obj_id, ra_j2000, dec_j2000, ra_now, dec_now, name, obj_type, messier_num, min_altitude = args
-    try:
-        rows = compute_viewing_rows_batch(ctx, np.array([obj_id], dtype=object), np.array([name], dtype=object), np.array([obj_type], dtype=object), np.array([messier_num], dtype=object), np.array([ra_j2000], dtype=np.float64), np.array([dec_j2000], dtype=np.float64), np.array([ra_now], dtype=np.float64), np.array([dec_now], dtype=np.float64), min_altitude)
-        return rows[0]
-    except Exception:
-        return (obj_id, name, obj_type, messier_num, ra_j2000, dec_j2000, 'N/A', 'N/A', 'Error', 'N/A',
-                'N/A', 'N/A', 'N/A', 'N/A', 0, 0, 'N/A', 'N/A')
-
-
 
 class StarTellerCLI:
     """Observer site + catalog; compute viewing windows (silent — CLI handles messaging)."""
@@ -739,10 +696,12 @@ class StarTellerCLI:
         if dark_windows:
             mid_idx = len(dark_windows) // 2
             _, ds, de = dark_windows[mid_idx]
-            mid_jd = (ds.timestamp() + de.timestamp()) * 0.5 / 86400.0 + 2440587.5
+            mid_jd = float(unix_timestamp_to_julian_date(0.5 * (ds.timestamp() + de.timestamp())))
         else:
             today = date.today()
-            mid_jd = (datetime(today.year, 7, 1, 12, 0, 0, tzinfo=pytz.UTC).timestamp() / 86400.0 + 2440587.5)
+            mid_jd = float(
+                unix_timestamp_to_julian_date(datetime(today.year, 7, 1, 12, 0, 0, tzinfo=pytz.UTC).timestamp())
+            )
         ra_j2000 = df_work["Right_Ascension"].to_numpy(dtype=np.float64, copy=False)
         dec_j2000 = df_work["Declination"].to_numpy(dtype=np.float64, copy=False)
         ra_now, dec_now = precess_equatorial_j2000(ra_j2000, dec_j2000, mid_jd)
