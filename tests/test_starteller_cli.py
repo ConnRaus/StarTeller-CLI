@@ -275,7 +275,7 @@ class TestStarTellerCLIPipelineTiming(unittest.TestCase):
             f"\n--- StarTeller pipeline timing ({st.latitude}°, {st.longitude}°, "
             f"full catalog, min_alt=20°, elevation=50m) ---\n"
             f"  Night calculations (get_dark_windows):     {night_s:8.2f} s\n"
-            f"  Object calculations (viewing batch):     {objects_s:8.2f} s\n"
+            f"  Object calculations (viewing rows):      {objects_s:8.2f} s\n"
             f"  Sum (sequential, nights then objects):     {total_s:8.2f} s\n"
             f"  Nights: {len(dark_windows)}  Rows out: {len(results)}\n"
             "---\n"
