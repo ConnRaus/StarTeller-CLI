@@ -9,10 +9,8 @@ import os
 import shutil
 import sys
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-
-import pytz
 
 try:
     from .starteller import StarTellerCLI
@@ -233,7 +231,7 @@ def main():
     )
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    filename = output_dir / f"optimal_viewing_times_{datetime.now(pytz.UTC).strftime('%Y%m%d_%H%M')}.csv"
+    filename = output_dir / f"optimal_viewing_times_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')}.csv"
     results.to_csv(str(filename), index=False)
 
     print("\n" + "=" * 60)

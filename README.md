@@ -115,10 +115,10 @@ This includes the NGC catalog, your saved location, and output directory prefere
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.10+
 - Internet connection (first run only, to download catalog)
 
-Dependencies: pandas, numpy, pytz, timezonefinder, tqdm
+Dependencies: pandas, numpy, tzdata (IANA DB for `zoneinfo`), timezonefinder, tqdm
 
 ## Data source
 

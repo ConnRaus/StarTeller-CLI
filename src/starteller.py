@@ -2,17 +2,21 @@
 """
 StarTeller Math Stuff
 """
-from datetime import date, datetime, time, timedelta
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
-import pytz
 from timezonefinder import TimezoneFinder
 
 try:
     from .catalog_manager import load_ngc_catalog
 except ImportError:
     from catalog_manager import load_ngc_catalog
+
+
+# --- 1. Time & sky geometry (Julian date, LST, precession, horizon coordinates) ---
 
 
 def unix_timestamp_to_julian_date(ts_unix):
@@ -27,63 +31,49 @@ def local_sidereal_time_rad(jd_array, longitude_deg):
     Takes: numpy array of Julian dates (UT1) and longitude in degrees
     Returns: numpy array of Local Sidereal Times in radians
     """
-
     # Find 0h UT1 Julian date (needed for equation) and fraction of day
     jd_floor = np.floor(jd_array - 0.5) + 0.5
     day_fraction = jd_array - jd_floor
-
     # Julian centuries (Eq 12.1)
     T = (jd_floor - 2451545.0) / 36525.0
-
     # GMST at midnight in degrees (Eq 12.3)
     gmst_midnight = 100.46061837 + (36000.770053608 * T) + (0.000387933 * T**2) - (T**3 / 38710000.0)
-
     # Add rotation for time since midnight (360.98564736629 deg per day = sidereal rate)
     gmst_deg = gmst_midnight + 360.98564736629 * day_fraction
-
     # Convert to LST by adding longitude and normalizing to 0-360
     lst_deg = (gmst_deg + longitude_deg) % 360.0
-
     # Convert to radians
     return np.deg2rad(lst_deg)
 
 
 def precess_equatorial_j2000(ra_j2000_deg, dec_j2000_deg, jd_target):
     """
-    Precess coordinates from J2000.0 epoch to target Julian date.
-
+    Precess coordinates from J2000.0 epoch to target Julian date
     Chapter 21 of https://auass.com/wp-content/uploads/2021/01/Astronomical-Algorithms.pdf
 
-    Takes: Right Ascension and Declination in J2000 degrees, Target Julian Date
+    Takes: Right Ascension and Declination in J2000 degrees, target Julian date
     Returns: New RA and Dec in degrees
     """
     # Julian centuries from J2000.0
     t = (jd_target - 2451545.0) / 36525.0
-
     # Accurate to within a few arcseconds for dates within ~100 years of J2000.0
     zeta = 2306.2181*t + 0.30188*t**2 - 0.017998*t**3
     z = 2306.2181*t + 1.09468*t**2 + 0.018203*t**3
     theta = 2004.3109*t-0.42665*t**2 - 0.041833*t**3
-
     # Convert to radians
     zeta_rad = np.deg2rad(zeta / 3600.0)
     z_rad = np.deg2rad(z / 3600.0)
     theta_rad = np.deg2rad(theta / 3600.0)
-
     ra_rad = np.deg2rad(ra_j2000_deg)
     dec_rad = np.deg2rad(dec_j2000_deg)
-
     # Precession formulas
     A = np.cos(dec_rad) * np.sin(ra_rad + zeta_rad)
     B = np.cos(theta_rad) * np.cos(dec_rad) * np.cos(ra_rad + zeta_rad) - np.sin(theta_rad) * np.sin(dec_rad)
     C = np.sin(theta_rad) * np.cos(dec_rad) * np.cos(ra_rad + zeta_rad) + np.cos(theta_rad) * np.sin(dec_rad)
-
     # New declination
     dec_new_rad = np.arcsin(np.clip(C, -1.0, 1.0))
-
     # New right ascension
     ra_new_rad = np.arctan2(A, B) + z_rad
-
     # Convert back to degrees
     ra_new_deg = np.rad2deg(ra_new_rad) % 360.0
     dec_new_deg = np.rad2deg(dec_new_rad)
@@ -93,20 +83,18 @@ def precess_equatorial_j2000(ra_j2000_deg, dec_j2000_deg, jd_target):
 
 def equatorial_to_horizontal_deg(ra_deg, dec_deg, lst_rad, lat_rad, return_azimuth=True):
     """
-    Calculate altitude and (optionally) azimuth from equatorial coordinates.
+    Calculate altitude and (optionally) azimuth from equatorial coordinates
     https://astronomy.stackexchange.com/questions/13067/conversion-from-equatorial-coordinate-to-horizon-coordinates
     https://en.wikipedia.org/wiki/Astronomical_coordinate_systems
 
-    Takes: Right Ascension and Declination in degrees, Local Sidereal Time in radians, latitude in radians
-    Returns: alt_deg, and az_deg if return_azimuth is True
+    Takes: RA and Dec (deg), local sidereal time and latitude (rad), whether to compute azimuth
+    Returns: altitude in degrees, and azimuth in degrees if return_azimuth is True
     """
     # Convert to radians
     ra_rad = np.deg2rad(ra_deg)
     dec_rad = np.deg2rad(dec_deg)
-
     # Hour angle = LST - RA
     ha_rad = lst_rad - ra_rad
-
     # sin a = cos(LHA) cos δ cos φ + sin δ sin φ (https://aa.usno.navy.mil/faq/alt_az); ha_rad = LHA
     sin_alt = (
         np.cos(ha_rad) * np.cos(dec_rad) * np.cos(lat_rad)
@@ -114,7 +102,7 @@ def equatorial_to_horizontal_deg(ra_deg, dec_deg, lst_rad, lat_rad, return_azimu
     )
     alt_rad = np.arcsin(np.clip(sin_alt, -1.0, 1.0))
     alt_deg = np.rad2deg(alt_rad)
-
+    
     if not return_azimuth:
         return alt_deg
 
@@ -134,20 +122,18 @@ def equatorial_to_horizontal_deg(ra_deg, dec_deg, lst_rad, lat_rad, return_azimu
     return alt_deg, az_deg
 
 
-# -------------------------------------------------------------------------------------
-# 3. Sun position & astronomical-dark windows (smooth alt(ts); roots at −18°)
-# -------------------------------------------------------------------------------------
+# --- 2. Sun altitude & −18° (astronomical dark) crossing search ---
+
 
 def sun_equatorial_deg(jd):
     """
-    Calculate the Sun's RA and Dec.
-    Equations from https://aa.usno.navy.mil/faq/sun_approx
+    Calculate the Sun's RA and Dec
+    https://aa.usno.navy.mil/faq/sun_approx
 
     Takes: Julian date (scalar or numpy array)
     Returns: (sun_ra_deg, sun_dec_deg) in degrees (scalar or numpy array)
     """
-    # NumPy math works on both scalars and arrays; we only branch at the end for output type.
-    is_scalar = np.isscalar(jd)
+    is_scalar = np.ndim(jd) == 0
     if is_scalar:
         jd = float(jd)
 
@@ -169,13 +155,13 @@ def sun_equatorial_deg(jd):
 
 def sun_altitude_deg(jd, latitude, longitude):
     """
-    Calculate Sun altitude.
-    Equations from: https://aa.usno.navy.mil/faq/alt_az (but using LST not GAST)
+    Calculate Sun altitude (LST-based horizon conversion)
+    https://aa.usno.navy.mil/faq/alt_az
 
-    Takes: Julian date (scalar or numpy array), latitude(deg), longitude(deg)
+    Takes: Julian date (scalar or numpy array), latitude and longitude (deg)
     Returns: Sun altitude in degrees (scalar or numpy array)
     """
-    if np.isscalar(jd):
+    if np.ndim(jd) == 0:
         sun_ra_deg, sun_dec_deg = sun_equatorial_deg(float(jd))
         lst_rad = float(local_sidereal_time_rad(float(jd), longitude))
         lat_rad = float(np.deg2rad(latitude))
@@ -193,132 +179,286 @@ def sun_altitude_deg(jd, latitude, longitude):
     sun_ra, sun_dec = sun_equatorial_deg(jd)
     lst_rad = local_sidereal_time_rad(jd, longitude)
     lat_rad = np.deg2rad(latitude)
-    alt_deg, _ = equatorial_to_horizontal_deg(sun_ra, sun_dec, lst_rad, lat_rad)
-    return alt_deg
+    ra_rad = np.deg2rad(sun_ra)
+    dec_rad = np.deg2rad(sun_dec)
+    ha_rad = lst_rad - ra_rad
+    sin_alt = np.cos(ha_rad) * np.cos(dec_rad) * np.cos(lat_rad) + np.sin(dec_rad) * np.sin(lat_rad)
+    return np.rad2deg(np.arcsin(np.clip(sin_alt, -1.0, 1.0)))
 
 
 ASTRO_DARK_ALT_DEG = -18.0
 
+
 def sun_altitude_minus_target(ts_unix, latitude, longitude, target_alt=ASTRO_DARK_ALT_DEG):
-    # Helper for root finding on Sun altitude
-    jd = float(unix_timestamp_to_julian_date(ts_unix))
-    return float(sun_altitude_deg(jd, latitude, longitude)) - target_alt
-
-
-def bisect_sun_altitude_crossing(ts_lo, ts_hi, latitude, longitude, target_alt=ASTRO_DARK_ALT_DEG):
     """
-    Find the time where Sun altitude == target_alt using bisection.
+    Sun altitude minus a target threshold (degrees)
 
-    Takes: Two Unix timestamps bracketing a crossing, latitude(deg), longitude(deg), target altitude (deg)
-    Returns: Unix timestamp (seconds)
+    Takes: Unix timestamp(s), latitude and longitude (deg), target altitude (deg)*
+    Returns: same shape as timestamps (scalar or numpy array)
     """
-    flo = sun_altitude_minus_target(ts_lo, latitude, longitude, target_alt)
-    fhi = sun_altitude_minus_target(ts_hi, latitude, longitude, target_alt)
-    if flo * fhi > 0:
-        return 0.5 * (ts_lo + ts_hi)
-    lo, hi = float(ts_lo), float(ts_hi)
-    fl, fh = flo, fhi
+    return sun_altitude_deg(unix_timestamp_to_julian_date(ts_unix), latitude, longitude) - target_alt
+
+
+def bisect_sun_altitude_crossings(ts_lo, ts_hi, latitude, longitude, target_alt=ASTRO_DARK_ALT_DEG):
+    """
+    Refine coarse time brackets to Sun altitude crossings at target_alt (vectorized bisection)
+
+    Takes: parallel arrays of interval endpoints (Unix s), site lat/lon (deg), target altitude (deg)*
+    Returns: Unix time per bracket (midpoint if the bracket does not actually cross)
+    """
+    n_brackets = int(ts_lo.shape[0])
+    if n_brackets == 0:
+        return np.zeros(0, dtype=np.float64)
+    lo = ts_lo.astype(np.float64, copy=True)
+    hi = ts_hi.astype(np.float64, copy=True)
+    f_lo = sun_altitude_minus_target(lo, latitude, longitude, target_alt)
+    f_hi = sun_altitude_minus_target(hi, latitude, longitude, target_alt)
+    bad_bracket = np.asarray(f_lo * f_hi > 0, dtype=np.bool_)
+    out = np.empty(n_brackets, dtype=np.float64)
+    out[bad_bracket] = 0.5 * (lo[bad_bracket] + hi[bad_bracket])
+    active = np.logical_not(bad_bracket)
     for _ in range(32):
-        m = 0.5 * (lo + hi)
-        fm = sun_altitude_minus_target(m, latitude, longitude, target_alt)
-        if fl * fm <= 0:
-            hi, fh = m, fm
-        else:
-            lo, fl = m, fm
-    return 0.5 * (lo + hi)
+        mid = 0.5 * (lo + hi)
+        f_mid = sun_altitude_minus_target(mid, latitude, longitude, target_alt)
+        move_hi = active & (f_lo * f_mid <= 0)
+        move_lo = active & (f_lo * f_mid > 0)
+        hi = np.where(move_hi, mid, hi)
+        f_hi = np.where(move_hi, f_mid, f_hi)
+        lo = np.where(move_lo, mid, lo)
+        f_lo = np.where(move_lo, f_mid, f_lo)
+    out[active] = 0.5 * (lo[active] + hi[active])
+    return out
 
 
-def dark_window_local_noon_day(check_date, latitude, longitude, local_tz, n_scan=100):
+# --- 3. Astronomical-dark nights: which local days → noon–noon grids → crossings → datetimes ---
+
+
+def check_dates_for_local_years(years_sorted):
     """
-    Find the longest astronomical-dark window for one local date. n_scan of 86 is bare minimum to pass built in tests.
+    Flatten local calendar days for each year (current year may be truncated)
 
-    Takes: local date, latitude(deg), longitude(deg), timezone, scan points
-    Returns: (dark_start_ts, dark_end_ts) Unix timestamps, or None if no darkness
+    Takes: sorted unique calendar years
+    Returns: list of datetime.date values in order
     """
-    t0 = local_tz.localize(datetime.combine(check_date, time(12, 0))).timestamp()
-    next_day = check_date + timedelta(days=1)
-    t1 = local_tz.localize(datetime.combine(next_day, time(12, 0))).timestamp()
-    if t1 <= t0:
-        return None
+    out = []
+    for year in years_sorted:
+        full_year_start = date(year, 1, 1)
+        num_days = (date(year + 1, 1, 1) - full_year_start).days
+        if year == datetime.now().year:
+            max_date = date.today() + timedelta(days=365)
+            if date(year + 1, 1, 1) > max_date:
+                num_days = (max_date - full_year_start).days
+        if num_days > 0:
+            out += [full_year_start + timedelta(days=day_offset) for day_offset in range(num_days)]
+    return out
 
-    ts = np.linspace(t0, t1, n_scan)
-    jd = unix_timestamp_to_julian_date(ts)
-    alt = sun_altitude_deg(jd, latitude, longitude)
-    f = alt - ASTRO_DARK_ALT_DEG
 
-    if np.all(f < 0):
-        return float(t0), float(t1)
-    if np.all(f > 0):
-        return None
+def local_noon_window_timestamps(check_dates, local_tz_str):
+    """
+    Unix timestamps for local civil noon on each date and on the following day
 
-    roots = []
-    for i in range(n_scan - 1):
-        if f[i] == 0.0:
-            roots.append(float(ts[i]))
-        elif f[i] * f[i + 1] < 0.0:
-            r = bisect_sun_altitude_crossing(float(ts[i]), float(ts[i + 1]), latitude, longitude, ASTRO_DARK_ALT_DEG)
-            roots.append(r)
+    Takes: list of local dates, IANA timezone name
+    Returns: arrays t0_arr and t1_arr (seconds since epoch) for each row of check_dates
+    """
+    zi = ZoneInfo(local_tz_str)
+    n_days = len(check_dates)
+    t0_arr = np.empty(n_days, dtype=np.float64)
+    t1_arr = np.empty(n_days, dtype=np.float64)
+    for i, check_date in enumerate(check_dates):
+        t0_arr[i] = datetime(check_date.year, check_date.month, check_date.day, 12, tzinfo=zi).timestamp()
+        next_day = check_date + timedelta(days=1)
+        t1_arr[i] = datetime(next_day.year, next_day.month, next_day.day, 12, tzinfo=zi).timestamp()
+    return t0_arr, t1_arr
 
-    roots = sorted(roots)
-    knots = [float(t0)] + roots + [float(t1)]
-    best_lo, best_hi = None, None
-    best_span = -1.0
-    for j in range(len(knots) - 1):
-        ta, tb = knots[j], knots[j + 1]
-        if tb - ta < 1e-6:
+
+def build_noon_to_noon_grids(t0_arr, t1_arr, latitude, longitude, n_scan):
+    """
+    For each local calendar day, build a uniform time grid from that day's civil noon to the next day's civil noon,
+    and the Sun's altitude in degrees minus the astronomical-dark limit (ASTRO_DARK_ALT_DEG, −18°).
+
+    Takes: Unix arrays for window start/end per day, site latitude and longitude (deg), sample count
+    Returns: ts_grid and alt_minus_dark, each shape (n_days, n_scan)
+    """
+    u = np.linspace(0.0, 1.0, n_scan, dtype=np.float64)
+    ts_grid = t0_arr[:, None] + (t1_arr[:, None] - t0_arr[:, None]) * u
+    alt_minus_dark = sun_altitude_deg(unix_timestamp_to_julian_date(ts_grid), latitude, longitude) - ASTRO_DARK_ALT_DEG
+    return ts_grid, alt_minus_dark
+
+
+def coarse_crossing_brackets(partial, alt_minus_dark, ts_grid, n_scan):
+    """
+    Coarse time brackets where the coarse grid crosses the astro-dark altitude
+
+    Takes: boolean mask of “mixed” days, altitude-minus-threshold grid, time grid, n_scan
+    Returns: two lists of Unix times (bracket lower and upper endpoints)
+    """
+    bracket_lo, bracket_hi = [], []
+    for day_i in np.flatnonzero(partial):
+        f_row = alt_minus_dark[day_i]
+        ts_row = ts_grid[day_i]
+        for i in range(n_scan - 1):
+            if f_row[i] * f_row[i + 1] < 0.0:
+                bracket_lo.append(float(ts_row[i]))
+                bracket_hi.append(float(ts_row[i + 1]))
+    return bracket_lo, bracket_hi
+
+
+@dataclass
+class DarkNightGrid:
+    """Inputs for assemble_dark_night_datetimes: batched noon windows, Sun grid, refined −18° crossings, site."""
+
+    check_dates: list
+    local_tz: object
+    t0_arr: np.ndarray
+    t1_arr: np.ndarray
+    valid: np.ndarray
+    alt_minus_dark: np.ndarray
+    ts_grid: np.ndarray
+    row_all_dark: np.ndarray
+    row_all_light: np.ndarray
+    refined_roots: np.ndarray
+    n_scan: int
+    latitude: float
+    longitude: float
+
+
+def assemble_dark_night_datetimes(grid: DarkNightGrid):
+    """
+    Build (date, dark_start, dark_end) rows from the coarse grid and refined crossings
+
+    Takes: DarkNightGrid (noon windows, grids, masks, refined roots, site, n_scan)
+    "Mixed" days (partial sun/night) are the rows that are neither all-dark nor all-light.
+    Returns: list of tuples (check_date, dark_start, dark_end) with timezone-aware datetimes
+    """
+    refined_idx = 0
+    segment_mid_times = []
+    nights_out = []
+    partial_rows = []
+    n_days = len(grid.check_dates)
+
+    for day_i in range(n_days):
+        if not grid.valid[day_i]:
             continue
-        mid = 0.5 * (ta + tb)
-        if sun_altitude_minus_target(mid, latitude, longitude, ASTRO_DARK_ALT_DEG) < 0.0:
-            span = tb - ta
-            if span > best_span:
-                best_span = span
-                best_lo, best_hi = ta, tb
+        check_date = grid.check_dates[day_i]
+        window_t0 = float(grid.t0_arr[day_i])
+        window_t1 = float(grid.t1_arr[day_i])
+        f_row = grid.alt_minus_dark[day_i]
+        ts_row = grid.ts_grid[day_i]
 
-    if best_lo is None or best_hi is None or best_hi <= best_lo:
+        if grid.row_all_dark[day_i]:
+            nights_out.append(
+                (
+                    check_date,
+                    datetime.fromtimestamp(window_t0, tz=grid.local_tz),
+                    datetime.fromtimestamp(window_t1, tz=grid.local_tz),
+                )
+            )
+        elif grid.row_all_light[day_i]:
+            continue
+        else:
+            roots = []
+            for i in range(grid.n_scan - 1):
+                if f_row[i] == 0.0:
+                    roots.append(float(ts_row[i]))
+                elif f_row[i] * f_row[i + 1] < 0.0:
+                    roots.append(float(grid.refined_roots[refined_idx]))
+                    refined_idx += 1
+            knots = [window_t0] + sorted(roots) + [window_t1]
+            partial_rows.append((check_date, knots))
+            for j in range(len(knots) - 1):
+                if knots[j + 1] - knots[j] >= 1e-6:
+                    segment_mid_times.append(0.5 * (knots[j] + knots[j + 1]))
+
+    mid_alt_minus = (
+        sun_altitude_minus_target(np.asarray(segment_mid_times, dtype=np.float64), grid.latitude, grid.longitude)
+        if segment_mid_times
+        else np.zeros(0, dtype=np.float64)
+    )
+    mid_idx = 0
+    for check_date, knots in partial_rows:
+        best_lo, best_hi, best_span = None, None, -1.0
+        for j in range(len(knots) - 1):
+            seg_t0, seg_t1 = knots[j], knots[j + 1]
+            if seg_t1 - seg_t0 < 1e-6:
+                continue
+            span = seg_t1 - seg_t0
+            if float(mid_alt_minus[mid_idx]) < 0.0 and span > best_span:
+                best_span, best_lo, best_hi = span, seg_t0, seg_t1
+            mid_idx += 1
+        if best_lo is None or best_hi is None or best_hi <= best_lo:
+            continue
+        nights_out.append(
+            (check_date, datetime.fromtimestamp(best_lo, tz=grid.local_tz), datetime.fromtimestamp(best_hi, tz=grid.local_tz))
+        )
+    return nights_out
+
+
+def compute_dark_windows_for_years(years_sorted, latitude, longitude, local_tz_str, n_scan=100):
+    """
+    Astronomical-dark local windows for one or more calendar years (batched Sun altitude)
+
+    Takes: sorted unique years, latitude and longitude (deg), IANA timezone string, samples per local day
+    Returns: list of (check_date, dark_start, dark_end) sorted by date, or None on error
+    """
+    try:
+        local_tz = ZoneInfo(local_tz_str)
+        check_dates = check_dates_for_local_years(years_sorted)
+        if not check_dates:
+            return []
+
+        t0_arr, t1_arr = local_noon_window_timestamps(check_dates, local_tz_str)
+        valid = t1_arr > t0_arr
+        ts_grid, alt_minus_dark = build_noon_to_noon_grids(t0_arr, t1_arr, latitude, longitude, n_scan)
+        row_all_dark = np.all(alt_minus_dark < 0.0, axis=1)
+        row_all_light = np.all(alt_minus_dark > 0.0, axis=1)
+        partial = valid & ~row_all_dark & ~row_all_light
+
+        bracket_lo, bracket_hi = coarse_crossing_brackets(partial, alt_minus_dark, ts_grid, n_scan)
+        refined_roots = bisect_sun_altitude_crossings(
+            np.asarray(bracket_lo, dtype=np.float64),
+            np.asarray(bracket_hi, dtype=np.float64),
+            latitude,
+            longitude,
+            ASTRO_DARK_ALT_DEG,
+        )
+
+        nights_out = assemble_dark_night_datetimes(
+            DarkNightGrid(
+                check_dates=check_dates,
+                local_tz=local_tz,
+                t0_arr=t0_arr,
+                t1_arr=t1_arr,
+                valid=valid,
+                alt_minus_dark=alt_minus_dark,
+                ts_grid=ts_grid,
+                row_all_dark=row_all_dark,
+                row_all_light=row_all_light,
+                refined_roots=refined_roots,
+                n_scan=n_scan,
+                latitude=latitude,
+                longitude=longitude,
+            )
+        )
+        return sorted(nights_out, key=lambda x: x[0])
+    except Exception:
         return None
-    return best_lo, best_hi
 
 
 def compute_year_dark_windows(args):
     """
-    Compute astronomical-dark [start, end] for each local calendar day.
+    Astronomical-dark windows for a single local calendar year
 
-    Args: (year, latitude, longitude, local_tz_str)
-    Returns: (year, list of (check_date, dark_start, dark_end)) or (year, None) on error.
+    Takes: tuple (year, latitude, longitude, local_tz_str)
+    Returns: (year, list of nights) or (year, None) on error
     """
     year, latitude, longitude, local_tz_str = args
-
-    try:
-        local_tz = pytz.timezone(local_tz_str)
-
-        full_year_start = date(year, 1, 1)
-        full_year_days = (date(year + 1, 1, 1) - full_year_start).days
-
-        if year == datetime.now().year:
-            max_date = date.today() + timedelta(days=365)
-            if date(year + 1, 1, 1) > max_date:
-                full_year_days = (max_date - full_year_start).days
-
-        nights_out = []
-
-        for day_offset in range(full_year_days):
-            check_date = full_year_start + timedelta(days=day_offset)
-            span = dark_window_local_noon_day(check_date, latitude, longitude, local_tz)
-            if span is None:
-                continue
-            dark_start_ts, dark_end_ts = span
-            dark_start = datetime.fromtimestamp(dark_start_ts, tz=local_tz)
-            dark_end = datetime.fromtimestamp(dark_end_ts, tz=local_tz)
-            nights_out.append((check_date, dark_start, dark_end))
-
-        return (year, nights_out)
-    except Exception:
+    nights_out = compute_dark_windows_for_years([year], latitude, longitude, local_tz_str)
+    if nights_out is None:
         return (year, None)
+    return (year, nights_out)
 
 
-# -----------------------------------------------------------------------------
-# 4. Shared night arrays + per-object viewing (find_optimal_viewing_times)
-# -----------------------------------------------------------------------------
+# --- 4. Optimal viewing: dark-night context + batch scan over catalog objects ---
 
 
 class ObservationContext:
@@ -326,24 +466,49 @@ class ObservationContext:
     __slots__ = ('latitude', 'longitude', 'night_dates', 'night_dark_start_ts', 'night_dark_end_ts', 'local_tz', 'local_tz_str')
 
     def __init__(self, latitude, longitude, night_dates_tuples, night_dark_start_ts, night_dark_end_ts, local_tz_str):
-        from datetime import date
-
         self.latitude = latitude
         self.longitude = longitude
         self.local_tz_str = local_tz_str
-        self.local_tz = pytz.timezone(local_tz_str)
+        self.local_tz = ZoneInfo(local_tz_str)
         self.night_dates = [date(y, m, d) for y, m, d in night_dates_tuples]
         self.night_dark_start_ts = np.asarray(night_dark_start_ts, dtype=np.float64)
         self.night_dark_end_ts = np.asarray(night_dark_end_ts, dtype=np.float64)
 
 
-def compute_viewing_rows_batch(ctx, object_ids, names, types, messier_col, ra_j2000, dec_j2000, ra_now, dec_now, min_altitude, n_scan=25, progress_nights=False):
-    """
-    Find the best night/time to view each object.
+@dataclass
+class ViewingBatchInput:
+    """Inputs for compute_viewing_rows_batch: night context plus catalog arrays and options."""
 
-    Takes: precomputed night context + catalog arrays + minimum altitude (deg)
-    Returns: list of output rows (tuples) for the final DataFrame
+    ctx: ObservationContext
+    object_ids: np.ndarray
+    names: np.ndarray
+    types: np.ndarray
+    messier_col: np.ndarray
+    ra_j2000: np.ndarray
+    dec_j2000: np.ndarray
+    ra_now: np.ndarray
+    dec_now: np.ndarray
+    min_altitude: float
+    progress_nights: bool = False
+
+
+def compute_viewing_rows_batch(batch: ViewingBatchInput):
     """
+    Find the best night and time to view each catalog object
+
+    Takes: ViewingBatchInput (night context, catalog arrays, min altitude, tqdm flag)
+    Returns: list of tuples, one row per object for the results DataFrame
+    """
+    ctx, object_ids, names, types, messier_col = (
+        batch.ctx,
+        batch.object_ids,
+        batch.names,
+        batch.types,
+        batch.messier_col,
+    )
+    ra_j2000, dec_j2000, ra_now, dec_now = batch.ra_j2000, batch.dec_j2000, batch.ra_now, batch.dec_now
+    min_altitude, progress_nights = batch.min_altitude, batch.progress_nights
+
     # Core idea:
     # - Altitude depends on hour angle: sin(alt) = sin(dec)*sin(lat) + cos(dec)*cos(lat)*cos(HA)
     # - Solve "alt >= min_altitude" as a simple hour-angle limit |HA| <= H
@@ -612,16 +777,10 @@ def compute_viewing_rows_batch(ctx, object_ids, names, types, messier_col, ra_j2
         set_hm = datetime.fromtimestamp(seg_tb, tz=ctx.local_tz).strftime('%H:%M')
         best_time = datetime.fromtimestamp(p_ts, tz=ctx.local_tz).strftime('%H:%M')
         best_altitude = round(peak_alt, 1)
-        best_azimuth = round(peak_az, 1)
-        if best_azimuth >= 360.0:
-            best_azimuth = 0.0
+        best_azimuth = round(peak_az, 1) % 360.0
         duration = round(float(best_duration[j]), 1)
-        rise_az_out = round(rise_az, 1)
-        if rise_az_out >= 360.0:
-            rise_az_out = 0.0
-        set_az_out = round(set_az, 1)
-        if set_az_out >= 360.0:
-            set_az_out = 0.0
+        rise_az_out = round(rise_az, 1) % 360.0
+        set_az_out = round(set_az, 1) % 360.0
         rows.append(
             (obj_id, name, obj_type, mnum, ra_j, dec_j, best_date, best_time,
              best_altitude, best_azimuth,
@@ -630,6 +789,10 @@ def compute_viewing_rows_batch(ctx, object_ids, names, types, messier_col, ra_j2
              dark_start.strftime('%H:%M'), dark_end.strftime('%H:%M'))
         )
     return rows
+
+
+# --- 5. StarTellerCLI — site, catalog, and the two user-facing pipelines ---
+
 
 class StarTellerCLI:
     """Observer site + catalog; compute viewing windows (silent — CLI handles messaging)."""
@@ -640,7 +803,7 @@ class StarTellerCLI:
         tf = TimezoneFinder()
         tz_name = tf.timezone_at(lat=latitude, lng=longitude)
         self.timezone_name = tz_name
-        self.local_tz = pytz.timezone(tz_name) if tz_name else pytz.UTC
+        self.local_tz = ZoneInfo(tz_name) if tz_name else timezone.utc
         self.catalog_df = self.setup_dso_catalog()
 
     def setup_dso_catalog(self):
@@ -656,33 +819,25 @@ class StarTellerCLI:
         if start_date is None:
             start_date = date.today()
         end_date = start_date + timedelta(days=days - 1)
-        years_needed = set()
-        current_date = start_date
-        for day_offset in range(days):
-            check_date = current_date + timedelta(days=day_offset)
-            years_needed.add(check_date.year)
-        local_tz_str = str(self.local_tz)
-        year_args = [
-            (year, self.latitude, self.longitude, local_tz_str)
-            for year in sorted(years_needed)
-        ]
-        results = [compute_year_dark_windows(args) for args in year_args]
-        all_windows = []
-        for year, year_windows in results:
-            if year_windows:
-                all_windows.extend(year_windows)
+        years_needed = {(start_date + timedelta(days=d)).year for d in range(days)}
+        local_tz_str = self.timezone_name or "UTC"
+        all_windows = compute_dark_windows_for_years(
+            sorted(years_needed), self.latitude, self.longitude, local_tz_str
+        )
+        if all_windows is None:
+            all_windows = []
         result = []
         for date_obj, dark_start, dark_end in all_windows:
             if start_date <= date_obj <= end_date:
                 result.append((date_obj, dark_start, dark_end))
         return sorted(result, key=lambda x: x[0])
 
-    def find_optimal_viewing_times(self, min_altitude=20, messier_only=False, use_tqdm=True, dark_windows=None, time_grid_points=25):
+    def find_optimal_viewing_times(self, min_altitude=20, messier_only=False, use_tqdm=True, dark_windows=None):
         """
-        Find the best night/time to view each object.
+        Find the best night and time to view each catalog object
 
-        Takes: min_alt(deg)*, messier_only(bool)*, use_tqdm(bool)*, dark_windows(list)*, time_grid_points(int)*
-        Returns: final DataFrame with viewing times
+        Takes: minimum altitude (deg), Messier-only flag, tqdm flag, optional precomputed dark windows
+        Returns: pandas DataFrame with viewing times and related columns
         """
         df_work = self.catalog_df
         if messier_only:
@@ -698,7 +853,7 @@ class StarTellerCLI:
             night_dates_tuples.append((date_obj.year, date_obj.month, date_obj.day))
             night_dark_start_ts[i] = dark_start.timestamp()
             night_dark_end_ts[i] = dark_end.timestamp()
-        local_tz_str = str(self.local_tz)
+        local_tz_str = self.timezone_name or "UTC"
         if dark_windows:
             mid_idx = len(dark_windows) // 2
             _, ds, de = dark_windows[mid_idx]
@@ -706,7 +861,7 @@ class StarTellerCLI:
         else:
             today = date.today()
             mid_jd = float(
-                unix_timestamp_to_julian_date(datetime(today.year, 7, 1, 12, 0, 0, tzinfo=pytz.UTC).timestamp())
+                unix_timestamp_to_julian_date(datetime(today.year, 7, 1, 12, 0, 0, tzinfo=timezone.utc).timestamp())
             )
         ra_j2000 = df_work["Right_Ascension"].to_numpy(dtype=np.float64, copy=False)
         dec_j2000 = df_work["Declination"].to_numpy(dtype=np.float64, copy=False)
@@ -722,7 +877,21 @@ class StarTellerCLI:
                    'Observing_Duration_Hours', 'Visible_Nights_Per_Year',
                    'Dark_Start_Local', 'Dark_End_Local']
         ctx = ObservationContext(self.latitude, self.longitude, night_dates_tuples, night_dark_start_ts, night_dark_end_ts, local_tz_str)
-        results = compute_viewing_rows_batch(ctx, object_ids, display_names, types, messier_col, ra_j2000, dec_j2000, ra_now, dec_now, min_altitude, n_scan=int(time_grid_points), progress_nights=use_tqdm)
+        results = compute_viewing_rows_batch(
+            ViewingBatchInput(
+                ctx=ctx,
+                object_ids=object_ids,
+                names=display_names,
+                types=types,
+                messier_col=messier_col,
+                ra_j2000=ra_j2000,
+                dec_j2000=dec_j2000,
+                ra_now=ra_now,
+                dec_now=dec_now,
+                min_altitude=min_altitude,
+                progress_nights=use_tqdm,
+            )
+        )
         results_df = pd.DataFrame(results, columns=columns)
         extra = pd.DataFrame(
             {
@@ -748,9 +917,9 @@ class StarTellerCLI:
         results_df = results_df[final_columns]
         if results_df.empty:
             return results_df
-        def sort_key(x):
-            return (isinstance(x, str) and (x == 'Never visible' or x == 'Error'))
-        results_df['never_visible'] = results_df['Max_Altitude_deg'].apply(sort_key)
+        results_df["never_visible"] = results_df["Max_Altitude_deg"].apply(
+            lambda x: isinstance(x, str) and x in ("Never visible", "Error")
+        )
         results_df = results_df.sort_values(
             by=['never_visible', 'Best_Date', 'Object'],
             ascending=[True, True, True]
