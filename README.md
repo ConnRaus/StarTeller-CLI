@@ -2,7 +2,7 @@
 
 A comprehensive command-line tool for astrophotographers and telescope enthusiasts to find optimal viewing times for deep sky objects throughout the year.
 
-Given your location, StarTeller calculates when each object in the NGC/IC/Messier catalogs reaches its highest point during astronomical darkness. It accounts for altitude and dark sky conditions to help you plan observation sessions.
+Given your location, StarTeller scans about one year of local nights. For each object it picks the best night: the one with the longest stretch of time where the object is above your minimum altitude during astronomical darkness (Sun more than 18° below the horizon). If two nights tie on that duration, the night with the higher peak altitude within the visible segment wins. Coordinates are precessed from J2000 to an epoch near the middle of the night list before the scan.
 
 ## Installation
 
@@ -44,64 +44,50 @@ python src/starteller_cli.py
 3. Set minimum altitude
 4. Get a CSV with optimal viewing times for ~13,000 deep sky objects
 
-The first run downloads the NGC catalog and Addendum (~4MB). Night darkness times are computed each run from your location and date range.
+The first run downloads the NGC catalog and addendum (~4MB). Night darkness times are computed each run from your location and a rolling ~365-day window from today’s date.
 
 ## Output
 
-Results go to `starteller_output/` by default, or a custom directory you set on first run. The CSV includes:
+Results go to `./starteller_output/` by default, or a custom directory you set on first run. CSV columns are written in this order:
 
-| Column                   | Description                                  |
-| ------------------------ | -------------------------------------------- |
-| Object                   | NGC/IC/Messier ID                            |
-| Name                     | Common name if available                     |
-| Type                     | Galaxy, Nebula, Cluster, etc.                |
-| Messier                  | Messier number if applicable (e.g., M31)     |
-| Right_Ascension          | Right Ascension in degrees (J2000)           |
-| Declination              | Declination in degrees (J2000)               |
-| Major_Axis_arcmin        | Major axis angular size in arcminutes        |
-| Minor_Axis_arcmin        | Minor axis angular size in arcminutes        |
-| Position_Angle_deg       | Position angle of major axis (N through E)   |
-| Best_Date                | Date when object is highest at midnight      |
-| Best_Time_Local          | Time of peak altitude                        |
-| Max_Altitude_deg         | Maximum altitude reached                     |
-| Azimuth_deg              | Azimuth at peak altitude (0°=N, 90°=E, etc.) |
-| Rise_Time_Local          | When it rises above your minimum altitude    |
-| Rise_Direction_deg       | Azimuth when rising                          |
-| Set_Time_Local           | When it drops below minimum altitude         |
-| Set_Direction_deg        | Azimuth when setting                         |
-| Observing_Duration_Hours | Total time above minimum altitude            |
-| Visible_Nights_Per_Year  | Nights with any time above min altitude in astro dark |
-| Dark_Start_Local         | Start of astronomical darkness               |
-| Dark_End_Local           | End of astronomical darkness                 |
-| Timezone                 | Timezone used for local times                |
+| Column                   | Description                                                                                                |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| Object                   | NGC/IC/Messier ID                                                                                          |
+| Name                     | Common name if available                                                                                   |
+| Type                     | Galaxy, Nebula, Cluster, etc.                                                                              |
+| Messier                  | Messier number if applicable (e.g., M31)                                                                   |
+| Constellation            | IAU constellation (from catalog)                                                                           |
+| Right_Ascension          | Right ascension in degrees (J2000)                                                                         |
+| Declination              | Declination in degrees (J2000)                                                                             |
+| Major_Axis_arcmin        | Major axis angular size in arcminutes                                                                      |
+| Minor_Axis_arcmin        | Minor axis angular size in arcminutes                                                                      |
+| Position_Angle_deg       | Position angle of major axis (N through E)                                                                 |
+| V_Mag                    | Visual magnitude (catalog)                                                                                 |
+| SurfBr                   | Surface brightness (catalog)                                                                               |
+| Best_Date                | Local calendar date of the **best night** (longest qualifying dark-time span, not “at midnight”)           |
+| Best_Time_Local          | Local time of the **peak** used for that night (within the visible segment, toward transit when possible)  |
+| Max_Altitude_deg         | Approximate altitude at that peak on the best night, or `Never visible` if no night qualifies              |
+| Azimuth_deg              | Azimuth at peak (0°=N, 90°=E, etc.)                                                                        |
+| Rise_Time_Local          | Local time the object crosses **up** through your minimum altitude on that best night’s segment (HH:MM)    |
+| Rise_Direction_deg       | Azimuth at rise                                                                                            |
+| Set_Time_Local           | Local time it crosses **down** through minimum altitude on that segment (HH:MM)                            |
+| Set_Direction_deg        | Azimuth at set                                                                                             |
+| Observing_Duration_Hours | Hours above your minimum altitude **during astro dark on that best night only** (not summed over the year) |
+| Visible_Nights_Per_Year  | Count of nights in the scan with **any** time above min altitude during astro dark                         |
+| Dark_Start_Local         | Start of astronomical darkness on the best night (HH:MM local)                                             |
+| Dark_End_Local           | End of astronomical darkness on the best night (HH:MM local)                                               |
+| Timezone                 | IANA timezone name used for local times                                                                    |
 
 ## Options
 
-**Filters:**
+**Filters and flags:**
 
-- Minimum altitude (default 20°) - objects must reach this altitude during dark time
-- Direction filter - azimuth range, e.g., `90,180` for objects in the East to South
+- **Minimum altitude** (prompt, default 20°): the object must reach this altitude during astro dark for a night to count; the best night maximizes the length of that interval.
+- **`starteller --messier-only`**: only Messier catalog entries are processed (smaller CSV).
 
 **Included catalogs:**
 
-The output includes all ~13,000 objects from NGC, IC, Messier, Caldwell, and other catalogs from OpenNGC.
-
-## Python API
-
-You can also use StarTeller programmatically:
-
-```python
-from src.starteller_cli import StarTellerCLI
-
-st = StarTellerCLI(
-    latitude=40.7,
-    longitude=-74.0,
-    elevation=10
-)
-
-results = st.find_optimal_viewing_times(min_altitude=25)
-results = st.find_optimal_viewing_times(min_altitude=25)
-```
+The output includes all ~13,000 objects from NGC, IC, Messier, Caldwell, and other catalogs from OpenNGC (subject to the Messier-only flag above). The full catalog can be found on my fork of OpenNGC [here](https://github.com/ConnRaus/Modified_OpenNGC).
 
 ## File locations
 

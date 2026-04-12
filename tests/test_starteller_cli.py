@@ -144,7 +144,7 @@ class TestStarTellerCLIFunctionality(unittest.TestCase):
     
     def setUp(self):
         """Set up test StarTellerCLI instance."""
-        self.st = StarTellerCLI(40.7, -74.0, elevation=50)
+        self.st = StarTellerCLI(40.7, -74.0)
     
     def test_initialization(self):
         """Test StarTellerCLI initialization."""
@@ -195,7 +195,7 @@ def _run_starteller_csv(latitude: float, longitude: float, min_altitude: float) 
         mock_dt.side_effect = lambda *a, **k: dt_std.datetime(*a, **k)
         mock_dt.fromtimestamp = dt_std.datetime.fromtimestamp
         mock_dt.combine = dt_std.datetime.combine
-        st = StarTellerCLI(latitude, longitude, elevation=0)
+        st = StarTellerCLI(latitude, longitude)
         return st.find_optimal_viewing_times(
             min_altitude=min_altitude,
             messier_only=False,
@@ -253,7 +253,7 @@ class TestStarTellerCLIPipelineTiming(unittest.TestCase):
     """
 
     def test_print_night_and_object_phase_timings(self):
-        st = StarTellerCLI(40.7, -74.0, elevation=50)
+        st = StarTellerCLI(40.7, -74.0)
         self.assertGreater(len(st.catalog_df), 0, "Need catalog for timing run")
 
         t0 = time.perf_counter()
@@ -273,7 +273,7 @@ class TestStarTellerCLIPipelineTiming(unittest.TestCase):
 
         print(
             f"\n--- StarTeller pipeline timing ({st.latitude}°, {st.longitude}°, "
-            f"full catalog, min_alt=20°, elevation=50m) ---\n"
+            f"full catalog, min_alt=20°) ---\n"
             f"  Night calculations (get_dark_windows):     {night_s:8.2f} s\n"
             f"  Object calculations (viewing rows):      {objects_s:8.2f} s\n"
             f"  Sum (sequential, nights then objects):     {total_s:8.2f} s\n"
@@ -291,14 +291,14 @@ class TestStarTellerCLIErrorHandling(unittest.TestCase):
     def test_invalid_coordinates(self):
         """Test handling of invalid coordinates."""
         try:
-            st = StarTellerCLI(91.0, 181.0, elevation=50)
+            st = StarTellerCLI(91.0, 181.0)
             self.assertIsNotNone(st)
         except Exception:
             pass
 
     def test_large_catalog(self):
         """Test handling of full catalog."""
-        st = StarTellerCLI(40.7, -74.0, elevation=50)
+        st = StarTellerCLI(40.7, -74.0)
         try:
             results = st.find_optimal_viewing_times(messier_only=True)
             self.assertIsInstance(results, pd.DataFrame)
@@ -413,7 +413,7 @@ def quick_integration_test():
     print("Running quick integration test...")
 
     try:
-        st = StarTellerCLI(40.7, -74.0, elevation=50)
+        st = StarTellerCLI(40.7, -74.0)
         print(f"✅ Initialized with {len(st.catalog_df)} objects")
         
         # Test calculation

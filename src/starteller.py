@@ -768,7 +768,7 @@ def compute_viewing_rows(view: ViewingInput):
 class StarTellerCLI:
     """Observer site + catalog; compute viewing windows."""
 
-    def __init__(self, latitude, longitude, elevation=0):
+    def __init__(self, latitude, longitude):
         self.latitude = latitude
         self.longitude = longitude
         tf = TimezoneFinder()
