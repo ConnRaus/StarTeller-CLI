@@ -81,42 +81,32 @@ def precess_equatorial_j2000(ra_j2000_deg, dec_j2000_deg, jd_target):
     return ra_new_deg, dec_new_deg
 
 
-def equatorial_to_horizontal_deg(ra_deg, dec_deg, lst_rad, lat_rad, return_azimuth=True):
+def equatorial_to_horizontal(ra_rad, dec_rad, lst_rad, lat_rad, return_azimuth=True):
     """
-    Calculate altitude and (optionally) azimuth from equatorial coordinates
+    Altitude and optional azimuth from equatorial coordinates.
+    RA, Dec, LST, and latitude are in radians; returned altitude and azimuth are in degrees.
+
     https://astronomy.stackexchange.com/questions/13067/conversion-from-equatorial-coordinate-to-horizon-coordinates
     https://en.wikipedia.org/wiki/Astronomical_coordinate_systems
-
-    Takes: RA and Dec (deg), local sidereal time and latitude (rad), whether to compute azimuth
-    Returns: altitude in degrees, and azimuth in degrees if return_azimuth is True
     """
-    # Convert to radians
-    ra_rad = np.deg2rad(ra_deg)
-    dec_rad = np.deg2rad(dec_deg)
-    # Hour angle = LST - RA
     ha_rad = lst_rad - ra_rad
-    # sin a = cos(LHA) cos δ cos φ + sin δ sin φ (https://aa.usno.navy.mil/faq/alt_az); ha_rad = LHA
     sin_alt = (
         np.cos(ha_rad) * np.cos(dec_rad) * np.cos(lat_rad)
         + np.sin(dec_rad) * np.sin(lat_rad)
     )
     alt_rad = np.arcsin(np.clip(sin_alt, -1.0, 1.0))
     alt_deg = np.rad2deg(alt_rad)
-    
+
     if not return_azimuth:
         return alt_deg
 
-    # Azimuth calculation
     cos_alt = np.cos(alt_rad)
-    # Avoid division by zero at zenith
     cos_alt = np.where(np.abs(cos_alt) < 1e-10, np.copysign(1e-10, cos_alt), cos_alt)
 
     sin_az = -np.cos(dec_rad) * np.sin(ha_rad) / cos_alt
     cos_az = (np.sin(dec_rad) - np.sin(lat_rad) * np.sin(alt_rad)) / (np.cos(lat_rad) * cos_alt)
 
     az_rad = np.arctan2(sin_az, cos_az)
-
-    # Convert to degrees
     az_deg = np.rad2deg(az_rad) % 360.0
 
     return alt_deg, az_deg
@@ -542,8 +532,10 @@ def compute_viewing_rows_batch(batch: ViewingBatchInput):
     # We compute LST for all nights in one vectorized call, then derive a per-night sidereal rate.
     jd0 = unix_timestamp_to_julian_date(ts0_all)
     jd1 = unix_timestamp_to_julian_date(ts1_all)
-    lst0_all = local_sidereal_time_rad(jd0, lon_deg)
-    lst1_all = local_sidereal_time_rad(jd1, lon_deg)
+    jd_ends = np.concatenate((jd0, jd1))
+    lst_ends = local_sidereal_time_rad(jd_ends, lon_deg)
+    lst0_all = lst_ends[:num_nights]
+    lst1_all = lst_ends[num_nights:]
     two_pi = 2.0 * np.pi
     # unwrap forward across the interval (LST is modulo 2π)
     dlst = lst1_all - lst0_all
@@ -680,15 +672,10 @@ def compute_viewing_rows_batch(batch: ViewingBatchInput):
 
         # Rank by duration (hours), then peak altitude at t_peak.
         dur_h = seg_len[jj] / 3600.0
-        jd_peak = unix_timestamp_to_julian_date(t_peak)
-        lst_peak = local_sidereal_time_rad(jd_peak, lon_deg)
-        peak_alt = equatorial_to_horizontal_deg(
-            np.rad2deg(ra_rad_vec[jj]),
-            np.rad2deg(dec_rad_vec[jj]),
-            lst_peak,
-            lat_rad,
-            return_azimuth=False,
-        )
+        # Peak altitude for tie-break: use the same linear HA model as the segment math
+        ha_peak = ha0[jj] + omega * (t_peak - ts0)
+        sin_alt_peak = sin_dec_v[jj] * sin_lat + cos_dec_v[jj] * cos_lat * np.cos(ha_peak)
+        peak_alt = np.rad2deg(np.arcsin(np.clip(sin_alt_peak, -1.0, 1.0)))
 
         old_d = best_duration[jj]
         old_pr = best_peak_rank[jj]
@@ -730,18 +717,13 @@ def compute_viewing_rows_batch(batch: ViewingBatchInput):
         t_transit = t_cand[np.arange(t_cand.shape[0]), pick]
         p_ts = np.clip(t_transit, ta, tb)
         n = int(gid.size)
-        ra3 = np.concatenate([ra_g, ra_g, ra_g])
-        dec3 = np.concatenate([dec_g, dec_g, dec_g])
-        ts_all = np.concatenate([ta, tb, p_ts])
+        ra3 = np.concatenate((ra_g, ra_g, ra_g))
+        dec3 = np.concatenate((dec_g, dec_g, dec_g))
+        ts_all = np.concatenate((ta, tb, p_ts))
         jd_all = unix_timestamp_to_julian_date(ts_all)
         lst_all = local_sidereal_time_rad(jd_all, lon_deg)
-        alt_all, az_all = equatorial_to_horizontal_deg(
-            np.rad2deg(ra3),
-            np.rad2deg(dec3),
-            lst_all,
-            lat_rad,
-            return_azimuth=True,
-        )
+        alt_all, az_all = equatorial_to_horizontal(ra3, dec3, lst_all, lat_rad, return_azimuth=True)
+
         rise_az_arr[gid] = az_all[:n]
         set_az_arr[gid] = az_all[n : 2 * n]
         peak_alt_arr[gid] = alt_all[2 * n :]
@@ -917,9 +899,7 @@ class StarTellerCLI:
         results_df = results_df[final_columns]
         if results_df.empty:
             return results_df
-        results_df["never_visible"] = results_df["Max_Altitude_deg"].apply(
-            lambda x: isinstance(x, str) and x in ("Never visible", "Error")
-        )
+        results_df["never_visible"] = results_df["Max_Altitude_deg"].astype(str).isin(("Never visible", "Error"))
         results_df = results_df.sort_values(
             by=['never_visible', 'Best_Date', 'Object'],
             ascending=[True, True, True]
