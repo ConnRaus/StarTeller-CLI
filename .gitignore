@@ -53,12 +53,21 @@ user_data/
 output/
 starteller_output/
 *.csv
-!truth3.csv
 
 # Ephemeris files (large, downloaded separately)
 data/de421.bsp
 data/*.bsp
 data/
+
+#Testing files
+!-34_151_0.csv
+!-34_151_20.csv
+!0_0_0.csv
+!0_0_20.csv
+!40_-74_0.csv
+!40_-74_20.csv
+!80_-40_0.csv
+!80_-40_20.csv
 
 # Logs
 *.log

@@ -6,6 +6,7 @@ Tests downloads, catalog loading, core calculations, error handling, and --clean
 
 import sys
 import os
+import time
 import tempfile
 import shutil
 import unittest
@@ -13,7 +14,8 @@ from unittest.mock import patch
 from io import StringIO
 from pathlib import Path
 import pandas as pd
-from datetime import date
+import datetime as dt_std
+from datetime import date, datetime
 
 # Add src directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
@@ -178,68 +180,109 @@ class TestStarTellerCLIFunctionality(unittest.TestCase):
         self.assertIsInstance(results_high, pd.DataFrame)
 
 
-def _truth3_csv_path() -> Path:
+_FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
+# Fixtures were built with “today” = 2026-04-11 (same as pinned here).
+_PINNED_TODAY = date(2026, 4, 11)
+_PINNED_NOW = datetime(2026, 4, 11, 12, 0, 0)
+
+
+def _run_starteller_csv(latitude: float, longitude: float, min_altitude: float) -> pd.DataFrame:
+    """StarTellerCLI + find_optimal_viewing_times with a fixed calendar date (see _PINNED_TODAY)."""
+    with patch("starteller.date") as mock_date, patch("starteller.datetime") as mock_dt:
+        mock_date.today.return_value = _PINNED_TODAY
+        mock_date.side_effect = lambda *a, **k: date(*a, **k)
+        mock_dt.now.return_value = _PINNED_NOW
+        mock_dt.side_effect = lambda *a, **k: dt_std.datetime(*a, **k)
+        mock_dt.fromtimestamp = dt_std.datetime.fromtimestamp
+        mock_dt.combine = dt_std.datetime.combine
+        st = StarTellerCLI(latitude, longitude, elevation=0)
+        return st.find_optimal_viewing_times(
+            min_altitude=min_altitude,
+            messier_only=False,
+            use_tqdm=False,
+        )
+
+
+class TestStarTellerFixtureCSVs(unittest.TestCase):
+    """Each test runs StarTeller for one (lat, lon, min_alt) and compares to tests/fixtures/*.csv."""
+
+    def _assert_matches_fixture(self, latitude: float, longitude: float, min_altitude: float, csv_name: str) -> None:
+        path = _FIXTURES_DIR / csv_name
+        self.assertTrue(path.is_file(), f"Missing fixture: {path}")
+        actual = _run_starteller_csv(latitude, longitude, min_altitude)
+        buf = StringIO()
+        # Same row order as find_optimal_viewing_times / CLI (never_visible, Best_Date, Object).
+        actual.to_csv(buf, index=False, lineterminator="\n")
+        expected_text = path.read_text().replace("\r\n", "\n")
+        self.assertMultiLineEqual(
+            buf.getvalue(),
+            expected_text,
+            f"CSV output does not match fixture {csv_name}",
+        )
+
+    def test_fixture_40_minus74_20(self):
+        self._assert_matches_fixture(40.0, -74.0, 20.0, "40_-74_20.csv")
+
+    def test_fixture_40_minus74_0(self):
+        self._assert_matches_fixture(40.0, -74.0, 0.0, "40_-74_0.csv")
+
+    def test_fixture_0_0_20(self):
+        self._assert_matches_fixture(0.0, 0.0, 20.0, "0_0_20.csv")
+
+    def test_fixture_0_0_0(self):
+        self._assert_matches_fixture(0.0, 0.0, 0.0, "0_0_0.csv")
+
+    def test_fixture_minus34_151_20(self):
+        self._assert_matches_fixture(-34.0, 151.0, 20.0, "-34_151_20.csv")
+
+    def test_fixture_minus34_151_0(self):
+        self._assert_matches_fixture(-34.0, 151.0, 0.0, "-34_151_0.csv")
+
+    def test_fixture_80_minus40_20(self):
+        self._assert_matches_fixture(80.0, -40.0, 20.0, "80_-40_20.csv")
+
+    def test_fixture_80_minus40_0(self):
+        self._assert_matches_fixture(80.0, -40.0, 0.0, "80_-40_0.csv")
+
+
+class TestStarTellerCLIPipelineTiming(unittest.TestCase):
     """
-    Committed benchmark location (CI-friendly).
+    One timed full pass: night-window precompute vs catalog/object viewing.
 
-    Put the file at:
-      StarTeller-CLI/tests/fixtures/truth3.csv
-    """
-    tests_dir = Path(__file__).resolve().parent
-    return tests_dir / "fixtures" / "truth3.csv"
-
-
-TRUTH3_CSV = _truth3_csv_path()
-
-
-@unittest.skipUnless(TRUTH3_CSV.exists(), f"Missing benchmark file: {TRUTH3_CSV}")
-class TestStarTellerCLITruth3Regression(unittest.TestCase):
-    """
-    Full-catalog regression benchmark.
-
-    truth3.csv was generated for:
-    - latitude 0, longitude 0
-    - min altitude 0 deg
-    - starting on 2026-04-11 (date.today pinned)
+    Prints to stdout (use pytest -s to see in pytest). Always passes if the pipeline succeeds.
     """
 
-    def test_truth3_full_catalog_matches(self):
-        truth = pd.read_csv(TRUTH3_CSV)
-        truth = truth.sort_values("Object").reset_index(drop=True)
+    def test_print_night_and_object_phase_timings(self):
+        st = StarTellerCLI(40.7, -74.0, elevation=50)
+        self.assertGreater(len(st.catalog_df), 0, "Need catalog for timing run")
 
-        fixed_today = date(2026, 4, 11)
+        t0 = time.perf_counter()
+        dark_windows = st.get_dark_windows()
+        t1 = time.perf_counter()
+        results = st.find_optimal_viewing_times(
+            min_altitude=20.0,
+            messier_only=False,
+            use_tqdm=False,
+            dark_windows=dark_windows,
+        )
+        t2 = time.perf_counter()
 
-        # StarTeller reads `datetime.date` from the `starteller` module namespace.
-        with patch("starteller.date") as mock_date:
-            mock_date.today.return_value = fixed_today
-            mock_date.side_effect = lambda *args, **kwargs: date(*args, **kwargs)
+        night_s = t1 - t0
+        objects_s = t2 - t1
+        total_s = t2 - t0
 
-            st = StarTellerCLI(0.0, 0.0, elevation=0)
-            out = st.find_optimal_viewing_times(
-                min_altitude=0.0,
-                messier_only=False,
-                use_tqdm=False,
-            )
+        print(
+            f"\n--- StarTeller pipeline timing ({st.latitude}°, {st.longitude}°, "
+            f"full catalog, min_alt=20°, elevation=50m) ---\n"
+            f"  Night calculations (get_dark_windows):     {night_s:8.2f} s\n"
+            f"  Object calculations (viewing batch):     {objects_s:8.2f} s\n"
+            f"  Sum (sequential, nights then objects):     {total_s:8.2f} s\n"
+            f"  Nights: {len(dark_windows)}  Rows out: {len(results)}\n"
+            "---\n"
+        )
 
-        out = out.sort_values("Object").reset_index(drop=True)
-
-        self.assertEqual(len(out), len(truth), "Row count should match truth3.csv")
-
-        cols = [
-            "Best_Date",
-            "Best_Time_Local",
-            "Observing_Duration_Hours",
-            "Max_Altitude_deg",
-            "Rise_Time_Local",
-            "Set_Time_Local",
-            "Azimuth_deg",
-            "Rise_Direction_deg",
-            "Set_Direction_deg",
-        ]
-
-        for col in cols:
-            mism = int((out[col].astype(str) != truth[col].astype(str)).sum())
-            self.assertEqual(mism, 0, f"Mismatch in column {col}: {mism} rows differ")
+        self.assertGreater(len(dark_windows), 0)
+        self.assertGreater(len(results), 0)
 
 
 class TestStarTellerCLIErrorHandling(unittest.TestCase):
@@ -333,7 +376,8 @@ def run_comprehensive_test():
         TestStarTellerCLIFunctionality,
         TestStarTellerCLIErrorHandling,
         TestStarTellerCLIClean,
-        TestStarTellerCLITruth3Regression,
+        TestStarTellerFixtureCSVs,
+        TestStarTellerCLIPipelineTiming,
     ]
     
     for test_class in test_classes:

@@ -142,7 +142,7 @@ def get_user_location():
     return latitude, longitude
 
 
-def _years_spanned(start_date, days):
+def years_spanned(start_date, days):
     return {(start_date + timedelta(days=i)).year for i in range(days)}
 
 
@@ -166,7 +166,7 @@ def find_optimal_viewing_times_with_messages(st, min_altitude=20, messier_only=F
     t_total_start = time.perf_counter()
     start_date = date.today()
     days = 365
-    print(f"Calculating night darkness times for {len(_years_spanned(start_date, days))} year(s)...")
+    print(f"Calculating night darkness times for {len(years_spanned(start_date, days))} year(s)...")
     t_night = time.perf_counter()
     dark_windows = st.get_dark_windows(start_date=start_date, days=days)
     print(f"✓ Night calculations completed in {time.perf_counter() - t_night:.2f}s")

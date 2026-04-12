@@ -94,6 +94,8 @@ def precess_equatorial_j2000(ra_j2000_deg, dec_j2000_deg, jd_target):
 def equatorial_to_horizontal_deg(ra_deg, dec_deg, lst_rad, lat_rad, return_azimuth=True):
     """
     Calculate altitude and (optionally) azimuth from equatorial coordinates.
+    https://astronomy.stackexchange.com/questions/13067/conversion-from-equatorial-coordinate-to-horizon-coordinates
+    https://en.wikipedia.org/wiki/Astronomical_coordinate_systems
 
     Takes: Right Ascension and Declination in degrees, Local Sidereal Time in radians, latitude in radians
     Returns: alt_deg, and az_deg if return_azimuth is True
@@ -105,9 +107,11 @@ def equatorial_to_horizontal_deg(ra_deg, dec_deg, lst_rad, lat_rad, return_azimu
     # Hour angle = LST - RA
     ha_rad = lst_rad - ra_rad
 
-    # Altitude calculation
-    sin_alt = (np.sin(dec_rad) * np.sin(lat_rad) +
-               np.cos(dec_rad) * np.cos(lat_rad) * np.cos(ha_rad))
+    # sin a = cos(LHA) cos δ cos φ + sin δ sin φ (https://aa.usno.navy.mil/faq/alt_az); ha_rad = LHA
+    sin_alt = (
+        np.cos(ha_rad) * np.cos(dec_rad) * np.cos(lat_rad)
+        + np.sin(dec_rad) * np.sin(lat_rad)
+    )
     alt_rad = np.arcsin(np.clip(sin_alt, -1.0, 1.0))
     alt_deg = np.rad2deg(alt_rad)
 
@@ -166,6 +170,7 @@ def sun_equatorial_deg(jd):
 def sun_altitude_deg(jd, latitude, longitude):
     """
     Calculate Sun altitude.
+    Equations from: https://aa.usno.navy.mil/faq/alt_az (but using LST not GAST)
 
     Takes: Julian date (scalar or numpy array), latitude(deg), longitude(deg)
     Returns: Sun altitude in degrees (scalar or numpy array)
@@ -177,9 +182,10 @@ def sun_altitude_deg(jd, latitude, longitude):
         ra_rad = float(np.deg2rad(sun_ra_deg))
         dec_rad = float(np.deg2rad(sun_dec_deg))
         ha_rad = lst_rad - ra_rad
+        # sin a = cos(LHA) cos δ cos φ + sin δ sin φ (https://aa.usno.navy.mil/faq/alt_az); ha_rad = LHA
         sin_alt = float(
-            np.sin(dec_rad) * np.sin(lat_rad)
-            + np.cos(dec_rad) * np.cos(lat_rad) * np.cos(ha_rad)
+            np.cos(ha_rad) * np.cos(dec_rad) * np.cos(lat_rad)
+            + np.sin(dec_rad) * np.sin(lat_rad)
         )
         sin_alt = max(-1.0, min(1.0, sin_alt))
         return float(np.rad2deg(np.arcsin(sin_alt)))
@@ -222,9 +228,9 @@ def bisect_sun_altitude_crossing(ts_lo, ts_hi, latitude, longitude, target_alt=A
     return 0.5 * (lo + hi)
 
 
-def dark_window_local_noon_day(check_date, latitude, longitude, local_tz, n_scan=33):
+def dark_window_local_noon_day(check_date, latitude, longitude, local_tz, n_scan=100):
     """
-    Find the longest astronomical-dark window for one local date.
+    Find the longest astronomical-dark window for one local date. n_scan of 86 is bare minimum to pass built in tests.
 
     Takes: local date, latitude(deg), longitude(deg), timezone, scan points
     Returns: (dark_start_ts, dark_end_ts) Unix timestamps, or None if no darkness
@@ -673,10 +679,10 @@ class StarTellerCLI:
 
     def find_optimal_viewing_times(self, min_altitude=20, messier_only=False, use_tqdm=True, dark_windows=None, time_grid_points=25):
         """
-        ``time_grid_points``: uniform samples per astro-dark span used only to *bracket* crossings of
-        the minimum-altitude level; each crossing is refined with bisection on alt(t)=h, and the peak
-        uses ternary search on the same continuous model. Use 25+ for minute-level agreement with
-        refined outputs; lower values risk missing short visibility gaps between samples.
+        Find the best night/time to view each object.
+
+        Takes: min_alt(deg)*, messier_only(bool)*, use_tqdm(bool)*, dark_windows(list)*, time_grid_points(int)*
+        Returns: final DataFrame with viewing times
         """
         df_work = self.catalog_df
         if messier_only:
