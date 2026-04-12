@@ -743,10 +743,13 @@ def compute_viewing_rows(view: ViewingInput):
         set_az = float(set_az_arr[j])
         dark_start = datetime.fromtimestamp(float(ctx.night_dark_start_ts[bi]), tz=ctx.local_tz)
         dark_end = datetime.fromtimestamp(float(ctx.night_dark_end_ts[bi]), tz=ctx.local_tz)
-        best_date = ctx.night_dates[bi]
+        peak_local = datetime.fromtimestamp(p_ts, tz=ctx.local_tz)
+        # Best_Date + Best_Time_Local = same local wall-clock instant as peak (may be the calendar
+        # day after the astro-dark window's evening label when the peak falls after midnight).
+        best_date = peak_local.date()
         rise_hm = datetime.fromtimestamp(seg_ta, tz=ctx.local_tz).strftime('%H:%M')
         set_hm = datetime.fromtimestamp(seg_tb, tz=ctx.local_tz).strftime('%H:%M')
-        best_time = datetime.fromtimestamp(p_ts, tz=ctx.local_tz).strftime('%H:%M')
+        best_time = peak_local.strftime('%H:%M')
         best_altitude = round(peak_alt, 1)
         best_azimuth = round(peak_az, 1) % 360.0
         duration = round(float(best_duration[j]), 1)
@@ -842,11 +845,14 @@ class StarTellerCLI:
         display_names = df_work["Name"].to_numpy()
         types = df_work["Type"].to_numpy()
         # Visible_Nights_Per_Year: count of nights with any time above min altitude during astro dark
-        columns = ['Object', 'Name', 'Type', 'Messier', 'Right_Ascension', 'Declination', 'Best_Date', 'Best_Time_Local',
-                   'Max_Altitude_deg', 'Azimuth_deg',
-                   'Rise_Time_Local', 'Rise_Direction_deg', 'Set_Time_Local', 'Set_Direction_deg',
-                   'Observing_Duration_Hours', 'Visible_Nights_Per_Year',
-                   'Dark_Start_Local', 'Dark_End_Local']
+        columns = [
+            'Object', 'Name', 'Type', 'Messier', 'Right_Ascension', 'Declination',
+            'Best_Date', 'Best_Time_Local',
+            'Max_Altitude_deg', 'Azimuth_deg',
+            'Rise_Time_Local', 'Rise_Direction_deg', 'Set_Time_Local', 'Set_Direction_deg',
+            'Observing_Duration_Hours', 'Visible_Nights_Per_Year',
+            'Dark_Start_Local', 'Dark_End_Local',
+        ]
         ctx = ObservationContext(self.latitude, self.longitude, night_dates_tuples, night_dark_start_ts, night_dark_end_ts, local_tz_str)
         results = compute_viewing_rows(
             ViewingInput(
