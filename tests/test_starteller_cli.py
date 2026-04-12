@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
 Comprehensive Test Suite for StarTeller-CLI
-Tests all functionality including downloads, caching, multiprocessing, and error handling.
+Tests downloads, catalog loading, core calculations, error handling, and --clean.
 """
 
 import sys
 import os
+import time
 import tempfile
 import shutil
 import unittest
@@ -13,13 +14,13 @@ from unittest.mock import patch
 from io import StringIO
 from pathlib import Path
 import pandas as pd
-import pickle
-from datetime import datetime, date
+import datetime as dt_std
+from datetime import date, datetime
 
 # Add src directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from starteller_cli import StarTellerCLI, run_clean, get_user_data_dir, get_cache_dir
+from starteller_cli import StarTellerCLI, run_clean, get_user_data_dir
 try:
     from src.catalog_manager import load_ngc_catalog, download_ngc_catalog
 except ImportError:
@@ -98,8 +99,10 @@ class TestStarTellerCLICatalog(unittest.TestCase):
         self.assertIsInstance(catalog, pd.DataFrame)
         self.assertGreater(len(catalog), 0)
         
-        # Should have required columns
-        required_columns = ['object_id', 'name', 'ra_deg', 'dec_deg', 'type', 'messier']
+        # Should have required columns (names match final viewing-times CSV where applicable)
+        required_columns = [
+            'Object', 'Name', 'Right_Ascension', 'Declination', 'Type', 'Messier',
+        ]
         for col in required_columns:
             self.assertIn(col, catalog.columns)
     
@@ -108,11 +111,11 @@ class TestStarTellerCLICatalog(unittest.TestCase):
         catalog = load_ngc_catalog()
         
         # Find objects with Messier designations
-        messier_objects = catalog[catalog['messier'].notna() & (catalog['messier'] != '')]
+        messier_objects = catalog[catalog['Messier'].notna() & (catalog['Messier'] != '')]
         
         if not messier_objects.empty:
             # Messier field should be formatted like "M31", "M42", etc.
-            for m_val in messier_objects['messier'].head(10):
+            for m_val in messier_objects['Messier'].head(10):
                 self.assertTrue(m_val.startswith('M'), f"Messier value '{m_val}' should start with 'M'")
     
     def test_angular_size_columns(self):
@@ -120,100 +123,20 @@ class TestStarTellerCLICatalog(unittest.TestCase):
         catalog = load_ngc_catalog()
         
         # Should have angular size columns
-        angular_size_columns = ['major_axis_arcmin', 'minor_axis_arcmin', 'position_angle_deg']
+        angular_size_columns = ['Major_Axis_arcmin', 'Minor_Axis_arcmin', 'Position_Angle_deg']
         for col in angular_size_columns:
             self.assertIn(col, catalog.columns)
         
         # Some objects should have angular size data (not all NaN)
         # Large galaxies like M31 should have major axis data
-        m31_candidates = catalog[catalog['messier'] == 'M31']
+        m31_candidates = catalog[catalog['Messier'] == 'M31']
         if not m31_candidates.empty:
             m31 = m31_candidates.iloc[0]
             # M31 (Andromeda) has a major axis of about 190 arcmin
             self.assertTrue(
-                pd.notna(m31['major_axis_arcmin']),
+                pd.notna(m31['Major_Axis_arcmin']),
                 "M31 should have major axis data"
             )
-
-
-class TestStarTellerCLICaching(unittest.TestCase):
-    """Test caching functionality."""
-    
-    def setUp(self):
-        """Set up test environment."""
-        self.test_cache_dir = tempfile.mkdtemp()
-        self.st = StarTellerCLI(40.7, -74.0, elevation=50)
-        # Override cache directory for testing
-        self.original_get_cache_filepath = self.st._get_cache_filepath
-        
-        def mock_get_cache_filepath(year=None):
-            if year is None:
-                year = datetime.now().year
-            return Path(self.test_cache_dir) / f"night_midpoints_test_{year}.pkl"
-        
-        self.st._get_cache_filepath = mock_get_cache_filepath
-    
-    def tearDown(self):
-        """Clean up test directories."""
-        if os.path.exists(self.test_cache_dir):
-            shutil.rmtree(self.test_cache_dir)
-    
-    def test_cache_creation(self):
-        """Test that cache files are created properly."""
-        # This will trigger cache creation
-        midpoints = self.st.get_night_midpoints(days=7)  # Small test
-        
-        self.assertGreater(len(midpoints), 0)
-        
-        # Check if cache file was created
-        cache_files = [f for f in os.listdir(self.test_cache_dir) if f.endswith('.pkl')]
-        self.assertGreater(len(cache_files), 0)
-    
-    def test_cache_loading(self):
-        """Test loading data from cache."""
-        # Create cache data
-        test_data = [(date.today(), datetime.now(), datetime.now(), datetime.now())]
-        cache_file = self.st._get_cache_filepath(2025)
-        
-        cache_data = {
-            'latitude': self.st.latitude,
-            'longitude': self.st.longitude,
-            'timezone': str(self.st.local_tz),
-            'year': 2025,
-            'night_midpoints': test_data,
-            'created_date': datetime.now().isoformat()
-        }
-        
-        cache_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(str(cache_file), 'wb') as f:
-            pickle.dump(cache_data, f)
-        
-        # Test loading
-        loaded_data = self.st._load_cache(2025)
-        self.assertIsNotNone(loaded_data)
-        self.assertEqual(len(loaded_data), 1)
-    
-    def test_cache_mismatch(self):
-        """Test handling of cache location/timezone mismatch."""
-        # Create cache with different location
-        cache_file = self.st._get_cache_filepath(2025)
-        
-        cache_data = {
-            'latitude': 50.0,  # Different latitude
-            'longitude': -100.0,  # Different longitude
-            'timezone': str(self.st.local_tz),
-            'year': 2025,
-            'night_midpoints': [(date.today(), datetime.now(), datetime.now(), datetime.now())],
-            'created_date': datetime.now().isoformat()
-        }
-        
-        cache_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(str(cache_file), 'wb') as f:
-            pickle.dump(cache_data, f)
-        
-        # Should return None due to location mismatch
-        loaded_data = self.st._load_cache(2025)
-        self.assertIsNone(loaded_data)
 
 
 class TestStarTellerCLIFunctionality(unittest.TestCase):
@@ -221,65 +144,18 @@ class TestStarTellerCLIFunctionality(unittest.TestCase):
     
     def setUp(self):
         """Set up test StarTellerCLI instance."""
-        self.test_cache_dir = tempfile.mkdtemp()
-        self.st = StarTellerCLI(40.7, -74.0, elevation=50)
-        
-        # Override cache directory for testing
-        self.original_get_cache_filepath = self.st._get_cache_filepath
-        
-        def mock_get_cache_filepath(year=None):
-            if year is None:
-                year = datetime.now().year
-            return Path(self.test_cache_dir) / f"night_midpoints_test_{year}.pkl"
-        
-        self.st._get_cache_filepath = mock_get_cache_filepath
-    
-    def tearDown(self):
-        """Clean up test directories."""
-        if os.path.exists(self.test_cache_dir):
-            shutil.rmtree(self.test_cache_dir)
+        self.st = StarTellerCLI(40.7, -74.0)
     
     def test_initialization(self):
         """Test StarTellerCLI initialization."""
         self.assertAlmostEqual(self.st.latitude, 40.7, places=1)
         self.assertAlmostEqual(self.st.longitude, -74.0, places=1)
         self.assertIsNotNone(self.st.local_tz)
-        self.assertGreater(len(self.st.dso_catalog), 0)
-    
-    def test_location_hash(self):
-        """Test location hash generation."""
-        hash1 = self.st._generate_location_hash()
-        
-        # Same location should produce same hash
-        st2 = StarTellerCLI(40.7, -74.0)
-        # Mock cache directory for st2
-        def mock_get_cache_filepath_st2(year=None):
-            if year is None:
-                year = datetime.now().year
-            return Path(self.test_cache_dir) / f"night_midpoints_test2_{year}.pkl"
-        st2._get_cache_filepath = mock_get_cache_filepath_st2
-        
-        hash2 = st2._generate_location_hash()
-        
-        self.assertEqual(hash1, hash2)
-        
-        # Different location should produce different hash
-        st3 = StarTellerCLI(41.0, -74.0, elevation=50)
-        # Mock cache directory for st3
-        def mock_get_cache_filepath_st3(year=None):
-            if year is None:
-                year = datetime.now().year
-            return Path(self.test_cache_dir) / f"night_midpoints_test3_{year}.pkl"
-        st3._get_cache_filepath = mock_get_cache_filepath_st3
-        
-        hash3 = st3._generate_location_hash()
-        
-        self.assertNotEqual(hash1, hash3)
-    
+        self.assertGreater(len(self.st.catalog_df), 0)
 
     def test_find_optimal_viewing_times(self):
         """Test optimal viewing times calculation."""
-        results = self.st.find_optimal_viewing_times(min_altitude=20)
+        results = self.st.find_optimal_viewing_times(min_altitude=20, messier_only=True)
         
         self.assertIsInstance(results, pd.DataFrame)
         self.assertGreater(len(results), 0)
@@ -293,26 +169,10 @@ class TestStarTellerCLIFunctionality(unittest.TestCase):
         for col in required_columns:
             self.assertIn(col, results.columns)
     
-    def test_direction_filtering(self):
-        """Test direction filtering functionality."""
-        # Test normal range (East: 45°-135°)
-        results_east = self.st.find_optimal_viewing_times(min_altitude=15, direction_filter=(45, 135))
-        
-        # Test wrapping range (North: 315°-45°)  
-        results_north = self.st.find_optimal_viewing_times(min_altitude=15, direction_filter=(315, 45))
-        
-        # Both should return DataFrame
-        self.assertIsInstance(results_east, pd.DataFrame)
-        self.assertIsInstance(results_north, pd.DataFrame)
-        
-        # Results might be different due to filtering
-        self.assertGreaterEqual(len(results_east), 0)
-        self.assertGreaterEqual(len(results_north), 0)
-    
     def test_altitude_filtering(self):
         """Test altitude filtering with different thresholds."""
-        results_low = self.st.find_optimal_viewing_times(min_altitude=10)
-        results_high = self.st.find_optimal_viewing_times(min_altitude=70)
+        results_low = self.st.find_optimal_viewing_times(min_altitude=10, messier_only=True)
+        results_high = self.st.find_optimal_viewing_times(min_altitude=70, messier_only=True)
         
         # Higher altitude requirement should generally result in fewer objects
         # (though not always due to different optimal dates)
@@ -320,155 +180,183 @@ class TestStarTellerCLIFunctionality(unittest.TestCase):
         self.assertIsInstance(results_high, pd.DataFrame)
 
 
+_FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
+# Fixtures were built with “today” = 2026-04-11 (same as pinned here).
+_PINNED_TODAY = date(2026, 4, 11)
+_PINNED_NOW = datetime(2026, 4, 11, 12, 0, 0)
+
+
+def _run_starteller_csv(latitude: float, longitude: float, min_altitude: float) -> pd.DataFrame:
+    """StarTellerCLI + find_optimal_viewing_times with a fixed calendar date (see _PINNED_TODAY)."""
+    with patch("starteller.date") as mock_date, patch("starteller.datetime") as mock_dt:
+        mock_date.today.return_value = _PINNED_TODAY
+        mock_date.side_effect = lambda *a, **k: date(*a, **k)
+        mock_dt.now.return_value = _PINNED_NOW
+        mock_dt.side_effect = lambda *a, **k: dt_std.datetime(*a, **k)
+        mock_dt.fromtimestamp = dt_std.datetime.fromtimestamp
+        mock_dt.combine = dt_std.datetime.combine
+        st = StarTellerCLI(latitude, longitude)
+        return st.find_optimal_viewing_times(
+            min_altitude=min_altitude,
+            messier_only=False,
+            use_tqdm=False,
+        )
+
+
+class TestStarTellerFixtureCSVs(unittest.TestCase):
+    """Each test runs StarTeller for one (lat, lon, min_alt) and compares to tests/fixtures/*.csv."""
+
+    def _assert_matches_fixture(self, latitude: float, longitude: float, min_altitude: float, csv_name: str) -> None:
+        path = _FIXTURES_DIR / csv_name
+        self.assertTrue(path.is_file(), f"Missing fixture: {path}")
+        actual = _run_starteller_csv(latitude, longitude, min_altitude)
+        buf = StringIO()
+        # Same row order as find_optimal_viewing_times / CLI (never_visible, Best_Date, Object).
+        actual.to_csv(buf, index=False, lineterminator="\n")
+        expected_text = path.read_text().replace("\r\n", "\n")
+        self.assertMultiLineEqual(
+            buf.getvalue(),
+            expected_text,
+            f"CSV output does not match fixture {csv_name}",
+        )
+
+    def test_fixture_40_minus74_20(self):
+        self._assert_matches_fixture(40.0, -74.0, 20.0, "40_-74_20.csv")
+
+    def test_fixture_40_minus74_0(self):
+        self._assert_matches_fixture(40.0, -74.0, 0.0, "40_-74_0.csv")
+
+    def test_fixture_0_0_20(self):
+        self._assert_matches_fixture(0.0, 0.0, 20.0, "0_0_20.csv")
+
+    def test_fixture_0_0_0(self):
+        self._assert_matches_fixture(0.0, 0.0, 0.0, "0_0_0.csv")
+
+    def test_fixture_minus34_151_20(self):
+        self._assert_matches_fixture(-34.0, 151.0, 20.0, "-34_151_20.csv")
+
+    def test_fixture_minus34_151_0(self):
+        self._assert_matches_fixture(-34.0, 151.0, 0.0, "-34_151_0.csv")
+
+    def test_fixture_80_minus40_20(self):
+        self._assert_matches_fixture(80.0, -40.0, 20.0, "80_-40_20.csv")
+
+    def test_fixture_80_minus40_0(self):
+        self._assert_matches_fixture(80.0, -40.0, 0.0, "80_-40_0.csv")
+
+
+class TestStarTellerCLIPipelineTiming(unittest.TestCase):
+    """
+    One timed full pass: night-window precompute vs catalog/object viewing.
+
+    Prints to stdout (use pytest -s to see in pytest). Always passes if the pipeline succeeds.
+    """
+
+    def test_print_night_and_object_phase_timings(self):
+        st = StarTellerCLI(40.7, -74.0)
+        self.assertGreater(len(st.catalog_df), 0, "Need catalog for timing run")
+
+        t0 = time.perf_counter()
+        dark_windows = st.get_dark_windows()
+        t1 = time.perf_counter()
+        results = st.find_optimal_viewing_times(
+            min_altitude=20.0,
+            messier_only=False,
+            use_tqdm=False,
+            dark_windows=dark_windows,
+        )
+        t2 = time.perf_counter()
+
+        night_s = t1 - t0
+        objects_s = t2 - t1
+        total_s = t2 - t0
+
+        print(
+            f"\n--- StarTeller pipeline timing ({st.latitude}°, {st.longitude}°, "
+            f"full catalog, min_alt=20°) ---\n"
+            f"  Night calculations (get_dark_windows):     {night_s:8.2f} s\n"
+            f"  Object calculations (viewing rows):      {objects_s:8.2f} s\n"
+            f"  Sum (sequential, nights then objects):     {total_s:8.2f} s\n"
+            f"  Nights: {len(dark_windows)}  Rows out: {len(results)}\n"
+            "---\n"
+        )
+
+        self.assertGreater(len(dark_windows), 0)
+        self.assertGreater(len(results), 0)
+
+
 class TestStarTellerCLIErrorHandling(unittest.TestCase):
     """Test error handling and edge cases."""
-    
-    def setUp(self):
-        """Set up test environment."""
-        self.test_cache_dir = tempfile.mkdtemp()
-    
-    def tearDown(self):
-        """Clean up test directories."""
-        if os.path.exists(self.test_cache_dir):
-            shutil.rmtree(self.test_cache_dir)
-    
-    def _mock_cache_dir(self, st):
-        """Mock cache directory for a StarTellerCLI instance."""
-        original_get_cache_filepath = st._get_cache_filepath
-        
-        def mock_get_cache_filepath(year=None):
-            if year is None:
-                year = datetime.now().year
-            return Path(self.test_cache_dir) / f"night_midpoints_test_{year}.pkl"
-        
-        st._get_cache_filepath = mock_get_cache_filepath
-        return original_get_cache_filepath
-    
+
     def test_invalid_coordinates(self):
         """Test handling of invalid coordinates."""
-        # These should still work but may have limited functionality
         try:
-            st = StarTellerCLI(91.0, 181.0, elevation=50)  # Invalid lat/lon
-            self._mock_cache_dir(st)
-            # Should still initialize but may have issues with timezone
+            st = StarTellerCLI(91.0, 181.0)
             self.assertIsNotNone(st)
         except Exception:
-            # Some level of graceful degradation is acceptable
             pass
-    
+
     def test_large_catalog(self):
         """Test handling of full catalog."""
-        st = StarTellerCLI(40.7, -74.0, elevation=50)
-        self._mock_cache_dir(st)
-        
-        # Should handle full catalog gracefully
+        st = StarTellerCLI(40.7, -74.0)
         try:
-            results = st.find_optimal_viewing_times()
+            results = st.find_optimal_viewing_times(messier_only=True)
             self.assertIsInstance(results, pd.DataFrame)
             self.assertGreater(len(results), 0)
         except Exception as e:
             self.fail(f"Catalog handling should be graceful, but got: {e}")
-    
-    def test_corrupted_cache(self):
-        """Test handling of corrupted cache files."""
-        st = StarTellerCLI(40.7, -74.0, elevation=50)
-        self._mock_cache_dir(st)
-        
-        # Create a corrupted cache file
-        cache_file = st._get_cache_filepath(2025)
-        cache_file.parent.mkdir(parents=True, exist_ok=True)
-        
-        with open(str(cache_file), 'w') as f:
-            f.write("This is not valid pickle data")
-        
-        # Should handle corruption gracefully and return None
-        loaded_data = st._load_cache(2025)
-        self.assertIsNone(loaded_data)
 
 
 class TestStarTellerCLIClean(unittest.TestCase):
-    """Test --clean: removal of user data and cache for fresh run."""
+    """Test --clean: removal of user data for a fresh run."""
 
     def setUp(self):
-        """Use temp dirs for user data and cache so we don't touch real data."""
+        """Use a temp user data dir so we don't touch real data."""
         self.test_user_data_dir = Path(tempfile.mkdtemp())
-        self.test_cache_dir = Path(tempfile.mkdtemp())
 
     def tearDown(self):
-        """Remove temp dirs if they still exist (clean may have removed them)."""
-        for d in (self.test_user_data_dir, self.test_cache_dir):
-            if d.exists():
-                shutil.rmtree(d)
+        if self.test_user_data_dir.exists():
+            shutil.rmtree(self.test_user_data_dir)
 
-    @patch("starteller_cli.get_cache_dir")
     @patch("starteller_cli.get_user_data_dir")
-    def test_clean_removes_user_data_and_cache(self, mock_user_data_dir, mock_cache_dir):
-        """run_clean removes both user data and cache directories when they exist."""
+    def test_clean_removes_user_data(self, mock_user_data_dir):
+        """run_clean removes the user data directory when it exists."""
         mock_user_data_dir.return_value = self.test_user_data_dir
-        mock_cache_dir.return_value = self.test_cache_dir
-        # Create typical contents
         (self.test_user_data_dir / "NGC.csv").write_text("Name;Type;RA;Dec\nNGC1;G;00:00:00;+00:00:00\n")
         (self.test_user_data_dir / "addendum.csv").write_text("Name;Type;RA;Dec\n")
         (self.test_user_data_dir / "user_location.txt").write_text("40.0,-74.0,0")
         (self.test_user_data_dir / "output_dir.txt").write_text("/tmp/out")
-        (self.test_cache_dir / "night_midpoints_foo_2025.pkl").write_bytes(b"fake pickle")
         self.assertTrue(self.test_user_data_dir.exists())
-        self.assertTrue(self.test_cache_dir.exists())
 
         run_clean()
 
         self.assertFalse(self.test_user_data_dir.exists(), "user data dir should be removed")
-        self.assertFalse(self.test_cache_dir.exists(), "cache dir should be removed")
 
-    @patch("starteller_cli.get_cache_dir")
     @patch("starteller_cli.get_user_data_dir")
-    def test_clean_when_dirs_missing(self, mock_user_data_dir, mock_cache_dir):
-        """run_clean does not raise when user data and cache dirs do not exist."""
+    def test_clean_when_dir_missing(self, mock_user_data_dir):
+        """run_clean does not raise when the user data directory does not exist."""
         missing_user = Path(tempfile.mkdtemp())
-        missing_cache = Path(tempfile.mkdtemp())
         shutil.rmtree(missing_user)
-        shutil.rmtree(missing_cache)
         mock_user_data_dir.return_value = missing_user
-        mock_cache_dir.return_value = missing_cache
         self.assertFalse(missing_user.exists())
-        self.assertFalse(missing_cache.exists())
 
         with patch("sys.stdout", new_callable=StringIO) as stdout:
             run_clean()
             out = stdout.getvalue()
         self.assertIn("already clean", out.lower())
 
-    @patch("starteller_cli.get_cache_dir")
     @patch("starteller_cli.get_user_data_dir")
-    def test_clean_removes_only_cache_when_user_data_missing(self, mock_user_data_dir, mock_cache_dir):
-        """run_clean removes cache when present and skips missing user data dir."""
-        missing_user = Path(tempfile.mkdtemp())
-        shutil.rmtree(missing_user)
-        mock_user_data_dir.return_value = missing_user
-        mock_cache_dir.return_value = self.test_cache_dir
-        (self.test_cache_dir / "night_midpoints_2025.pkl").write_bytes(b"x")
-
-        run_clean()
-
-        self.assertFalse(missing_user.exists())
-        self.assertFalse(self.test_cache_dir.exists())
-
-    @patch("starteller_cli.get_cache_dir")
-    @patch("starteller_cli.get_user_data_dir")
-    def test_clean_prints_removed_paths(self, mock_user_data_dir, mock_cache_dir):
-        """run_clean prints the paths it removed."""
+    def test_clean_prints_removed_path(self, mock_user_data_dir):
+        """run_clean prints the path it removed."""
         mock_user_data_dir.return_value = self.test_user_data_dir
-        mock_cache_dir.return_value = self.test_cache_dir
         (self.test_user_data_dir / "NGC.csv").write_text("dummy")
-        (self.test_cache_dir / "x.pkl").write_bytes(b"x")
 
         with patch("sys.stdout", new_callable=StringIO) as stdout:
             run_clean()
             out = stdout.getvalue()
 
-        self.assertIn("Removed user data and cache", out)
+        self.assertIn("Removed user data", out)
         self.assertIn(str(self.test_user_data_dir), out)
-        self.assertIn(str(self.test_cache_dir), out)
 
 
 def run_comprehensive_test():
@@ -485,10 +373,11 @@ def run_comprehensive_test():
     test_classes = [
         TestStarTellerCLIDownload,
         TestStarTellerCLICatalog,
-        TestStarTellerCLICaching,
         TestStarTellerCLIFunctionality,
         TestStarTellerCLIErrorHandling,
         TestStarTellerCLIClean,
+        TestStarTellerFixtureCSVs,
+        TestStarTellerCLIPipelineTiming,
     ]
     
     for test_class in test_classes:
@@ -508,7 +397,6 @@ def run_comprehensive_test():
         print("🎉 ALL TESTS PASSED!")
         print("✅ Download functionality working")
         print("✅ Catalog loading working")
-        print("✅ Caching system working")
         print("✅ Core calculations working")
         print("✅ Error handling working")
         print("\nStarTeller-CLI is ready for production use!")
@@ -523,26 +411,13 @@ def run_comprehensive_test():
 def quick_integration_test():
     """Quick integration test for basic functionality."""
     print("Running quick integration test...")
-    
-    # Use temporary cache directory for testing
-    test_cache_dir = tempfile.mkdtemp()
-    
+
     try:
-        # Test basic functionality
-        st = StarTellerCLI(40.7, -74.0, elevation=50)
-        
-        # Override cache directory for testing
-        def mock_get_cache_filepath(year=None):
-            if year is None:
-                year = datetime.now().year
-            return Path(test_cache_dir) / f"night_midpoints_quick_test_{year}.pkl"
-        
-        st._get_cache_filepath = mock_get_cache_filepath
-        
-        print(f"✅ Initialized with {len(st.dso_catalog)} objects")
+        st = StarTellerCLI(40.7, -74.0)
+        print(f"✅ Initialized with {len(st.catalog_df)} objects")
         
         # Test calculation
-        results = st.find_optimal_viewing_times(min_altitude=20)
+        results = st.find_optimal_viewing_times(min_altitude=20, messier_only=True)
         print(f"✅ Generated results for {len(results)} objects")
         
         # Test that we have expected data
@@ -555,10 +430,6 @@ def quick_integration_test():
     except Exception as e:
         print(f"❌ Quick integration test FAILED: {e}")
         return False
-    finally:
-        # Clean up temporary cache directory
-        if os.path.exists(test_cache_dir):
-            shutil.rmtree(test_cache_dir)
 
 
 if __name__ == "__main__":
