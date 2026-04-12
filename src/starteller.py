@@ -637,11 +637,19 @@ def compute_viewing_rows_batch(ctx, object_ids, names, types, messier_col, ra_j2
         best_time = datetime.fromtimestamp(p_ts, tz=ctx.local_tz).strftime('%H:%M')
         best_altitude = round(peak_alt, 1)
         best_azimuth = round(peak_az, 1)
+        if best_azimuth >= 360.0:
+            best_azimuth = 0.0
         duration = round(float(best_duration[j]), 1)
+        rise_az_out = round(rise_az, 1)
+        if rise_az_out >= 360.0:
+            rise_az_out = 0.0
+        set_az_out = round(set_az, 1)
+        if set_az_out >= 360.0:
+            set_az_out = 0.0
         rows.append(
             (obj_id, name, obj_type, mnum, ra_j, dec_j, best_date, best_time,
              best_altitude, best_azimuth,
-             rise_hm, round(rise_az, 1), set_hm, round(set_az, 1),
+             rise_hm, rise_az_out, set_hm, set_az_out,
              duration, int(total_good[j]),
              dark_start.strftime('%H:%M'), dark_end.strftime('%H:%M'))
         )

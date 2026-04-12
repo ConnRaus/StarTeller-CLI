@@ -13,6 +13,7 @@ from unittest.mock import patch
 from io import StringIO
 from pathlib import Path
 import pandas as pd
+from datetime import date
 
 # Add src directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
@@ -177,6 +178,70 @@ class TestStarTellerCLIFunctionality(unittest.TestCase):
         self.assertIsInstance(results_high, pd.DataFrame)
 
 
+def _truth3_csv_path() -> Path:
+    """
+    Committed benchmark location (CI-friendly).
+
+    Put the file at:
+      StarTeller-CLI/tests/fixtures/truth3.csv
+    """
+    tests_dir = Path(__file__).resolve().parent
+    return tests_dir / "fixtures" / "truth3.csv"
+
+
+TRUTH3_CSV = _truth3_csv_path()
+
+
+@unittest.skipUnless(TRUTH3_CSV.exists(), f"Missing benchmark file: {TRUTH3_CSV}")
+class TestStarTellerCLITruth3Regression(unittest.TestCase):
+    """
+    Full-catalog regression benchmark.
+
+    truth3.csv was generated for:
+    - latitude 0, longitude 0
+    - min altitude 0 deg
+    - starting on 2026-04-11 (date.today pinned)
+    """
+
+    def test_truth3_full_catalog_matches(self):
+        truth = pd.read_csv(TRUTH3_CSV)
+        truth = truth.sort_values("Object").reset_index(drop=True)
+
+        fixed_today = date(2026, 4, 11)
+
+        # StarTeller reads `datetime.date` from the `starteller` module namespace.
+        with patch("starteller.date") as mock_date:
+            mock_date.today.return_value = fixed_today
+            mock_date.side_effect = lambda *args, **kwargs: date(*args, **kwargs)
+
+            st = StarTellerCLI(0.0, 0.0, elevation=0)
+            out = st.find_optimal_viewing_times(
+                min_altitude=0.0,
+                messier_only=False,
+                use_tqdm=False,
+            )
+
+        out = out.sort_values("Object").reset_index(drop=True)
+
+        self.assertEqual(len(out), len(truth), "Row count should match truth3.csv")
+
+        cols = [
+            "Best_Date",
+            "Best_Time_Local",
+            "Observing_Duration_Hours",
+            "Max_Altitude_deg",
+            "Rise_Time_Local",
+            "Set_Time_Local",
+            "Azimuth_deg",
+            "Rise_Direction_deg",
+            "Set_Direction_deg",
+        ]
+
+        for col in cols:
+            mism = int((out[col].astype(str) != truth[col].astype(str)).sum())
+            self.assertEqual(mism, 0, f"Mismatch in column {col}: {mism} rows differ")
+
+
 class TestStarTellerCLIErrorHandling(unittest.TestCase):
     """Test error handling and edge cases."""
 
@@ -268,6 +333,7 @@ def run_comprehensive_test():
         TestStarTellerCLIFunctionality,
         TestStarTellerCLIErrorHandling,
         TestStarTellerCLIClean,
+        TestStarTellerCLITruth3Regression,
     ]
     
     for test_class in test_classes:

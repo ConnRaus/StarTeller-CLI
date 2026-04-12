@@ -1,5 +1,6 @@
 # Python
 __pycache__/
+.pytest_cache/
 *.py[cod]
 *$py.class
 *.so
@@ -52,6 +53,7 @@ user_data/
 output/
 starteller_output/
 *.csv
+!truth3.csv
 
 # Ephemeris files (large, downloaded separately)
 data/de421.bsp
