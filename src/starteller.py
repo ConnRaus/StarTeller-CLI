@@ -728,8 +728,8 @@ def compute_viewing_rows(view: ViewingInput):
         name = names[j]
         obj_type = types[j]
         mnum = messier_col[j]
-        ra_j = float(ra_j2000[j])
-        dec_j = float(dec_j2000[j])
+        ra_j = round(float(ra_j2000[j]), 6)
+        dec_j = round(float(dec_j2000[j]), 6)
         bi = int(best_night_idx[j])
         if bi < 0:
             rows.append((obj_id, name, obj_type, mnum, ra_j, dec_j) + NO_VIEW_ROW_SUFFIX)
