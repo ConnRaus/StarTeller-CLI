@@ -434,20 +434,6 @@ def compute_dark_windows_for_years(years_sorted, latitude, longitude, local_tz_s
         return None
 
 
-def compute_year_dark_windows(args):
-    """
-    Astronomical-dark windows for a single local calendar year
-
-    Takes: tuple (year, latitude, longitude, local_tz_str)
-    Returns: (year, list of nights) or (year, None) on error
-    """
-    year, latitude, longitude, local_tz_str = args
-    nights_out = compute_dark_windows_for_years([year], latitude, longitude, local_tz_str)
-    if nights_out is None:
-        return (year, None)
-    return (year, nights_out)
-
-
 # --- 4. Optimal viewing: best night per catalog object during astronomical dark ---
 
 
